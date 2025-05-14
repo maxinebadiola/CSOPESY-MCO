@@ -35,6 +35,7 @@ void clearScreen() {
        system("clear");
    #endif
        printHeader();
+       printCommands();
    }
    
    int main() {
