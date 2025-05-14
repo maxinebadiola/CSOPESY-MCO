@@ -5,7 +5,16 @@
 using namespace std;
 
 void printHeader() {
-   cout << "CSOPESY CLI" << endl;
+    cout << R"(
+   _____  _____  ____  _____  ______  _______     __
+  / ____|/ ____|/ __ \|  __ \|  ____|/ ____\ \   / /
+ | |    | (___ | |  | | |__) | |__  | (___  \ \_/ / 
+ | |     \___ \| |  | |  ___/|  __|  \___ \  \   /  
+ | |____ ____) | |__| | |    | |____ ____) |  | |   
+  \_____|_____/ \____/|_|    |______|_____/   |_|   
+
+                  CSOPESY CLI EMULATOR
+)" << endl;
 }
 
 void printCommands() {
@@ -31,7 +40,7 @@ void clearScreen() {
    int main() {
        string command;
        printHeader();
-      // printCommands();
+       printCommands();
    
        while (true) {
            cout << "\n> ";
