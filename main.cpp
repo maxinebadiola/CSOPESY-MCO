@@ -31,7 +31,7 @@ void clearScreen() {
    int main() {
        string command;
        printHeader();
-      //  printCommands();
+      // printCommands();
    
        while (true) {
            cout << "\n> ";
