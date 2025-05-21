@@ -60,11 +60,13 @@ public:
         this->name = name;
         currentLine = 0;
         totalLines = total;
-        time_t now = time(NULL);
-        timestamp = string(ctime(&now));
-        if (!timestamp.empty() && timestamp.back() == '\n') {
-            timestamp.pop_back();
-        }
+        //HH:MM:SS AM/PM
+        time_t now = time(0); //https://cplusplus.com/reference/ctime/time/
+        tm* localTime = localtime(&now); 
+        char buffer[100];
+        strftime(buffer, sizeof(buffer), "%m/%d/%Y, %I:%M:%S %p", localTime);
+        timestamp = buffer;
+        
     }
 
     void displayInfo() {
