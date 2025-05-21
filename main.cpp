@@ -20,16 +20,24 @@ void printHeader() {
 )" << endl;
 }
 
-void printCommands() {
+void printMenuCommands() {
+   cout << "==== MAIN MENU ====" << endl;
    cout << "Available Commands:" << endl;
+   cout << "1. screen -s <name>" << endl;
+   cout << "2. screen -r <name>" << endl;
+   cout << "3. clear / cls" << endl;
+   cout << "4. exit" << endl;
+}
+
+void printScreenCommands() {
+   cout << "==== SCREEN COMMANDS ====" << endl;
    cout << "1. initialize" << endl;
-   cout << "2. screen -s <name>" << endl;
-   cout << "3. screen -r <name>" << endl;
-   cout << "4. scheduler-test" << endl;
-   cout << "5. scheduler-stop" << endl;
-   cout << "6. report-util" << endl;
-   cout << "7. clear / cls" << endl;
-   cout << "8. exit" << endl;
+   cout << "2. scheduler-test" << endl;
+   cout << "3. scheduler-stop" << endl;
+   cout << "4. report-util" << endl;
+   cout << "5. screen" << endl;
+   cout << "6. clear / cls" << endl; 
+   cout << "7. exit" << endl;
 }
 
 void clearScreen() {
@@ -39,7 +47,6 @@ void clearScreen() {
        system("clear");
    #endif
    printHeader();
-   printCommands();
 }
    
 //W3 NEW: screen console class
@@ -54,6 +61,7 @@ public:
     int totalLines;
     string timestamp;
 
+    //default constructor
     Console() : name(""), currentLine(0), totalLines(0), timestamp("") {}
 
     Console(const string& name, int total) {
@@ -66,7 +74,6 @@ public:
         char buffer[100];
         strftime(buffer, sizeof(buffer), "%m/%d/%Y, %I:%M:%S %p", localTime);
         timestamp = buffer;
-        
     }
 
     void displayInfo() {
@@ -76,67 +83,100 @@ public:
     }
 };
 
-int main() {
-    map<string, Console> screens; // W3 NEW: screen instances
-    string command;
-    printHeader();
-    printCommands();
+//W3 NEW: screen handling
+void screenSession(Console& screen) {
+    clearScreen(); 
+    cout << "==== SCREEN SESSION: " << screen.name << " ====" << endl;
+    screen.displayInfo();
+    printScreenCommands();
 
     while (true) {
+        cout << "\n" << screen.name << " > ";
+        string screenCmd;
+        getline(cin, screenCmd);
+
+        if (screenCmd == "exit") {
+            cout << "Exiting screen session..." << endl; //TODO: fix menu reprinting
+            break; 
+        } else if (screenCmd == "clear" || screenCmd == "cls") {
+            screen.currentLine++;
+            clearScreen();
+            cout << "==== SCREEN SESSION: " << screen.name << " ====" << endl;
+            screen.displayInfo();
+            printScreenCommands();
+            continue;
+        } else if (screen.currentLine >= screen.totalLines) {
+            cout << "100 lines executed. No more commands can be run." << endl;
+        } else if (screenCmd == "initialize") {
+            cout << "Initialize command recognized." << endl;
+            screen.currentLine++;
+        } else if (screenCmd == "scheduler-test") {
+            cout << "Scheduler-test command recognized." << endl;
+            screen.currentLine++;
+        } else if (screenCmd == "scheduler-stop") {
+            cout << "Scheduler-stop command recognized." << endl;
+            screen.currentLine++;
+        } else if (screenCmd == "report-util") {
+            cout << "Report-util command recognized." << endl;
+            screen.currentLine++;
+        } else if (screenCmd == "screen") {
+            screen.currentLine++;
+            screen.displayInfo();
+        } else {
+            cout << "Unrecognized command. Please try again." << endl;
+            screen.currentLine++;
+        }
+    }
+}
+
+//W3 NEW: main menu
+void menuSession(map<string, Console>& screens) {
+     printMenuCommands();
+    while (true) {
+
         cout << "\n> ";
+        string command;
         getline(cin, command);
-        //W2 commands
-        if (command == "initialize") {
-            cout << "Initialize command recognized. Doing something." << endl;
-        } else if (command == "scheduler-test") {
-            cout << "Scheduler-test command recognized. Doing something." << endl;
-        } else if (command == "scheduler-stop") {
-            cout << "Scheduler-stop command recognized. Doing something." << endl;
-        } else if (command == "report-util") {
-            cout << "Report-util command recognized. Doing something." << endl;
+
+        if (command == "exit") {
+            cout << "Exiting program..." << endl;
+            break;
         } else if (command == "clear" || command == "cls") {
             clearScreen();
-        } 
-        //W3 NEW: create new screen (screen -s <name>)
-        else if (command.find("screen -s ") == 0) {
-            string name = command.substr(10); // get <name> (all characters after "screen -s ")
-            if (name.empty()) { //empty <name>
-                cout << "Input name for the screen session." << endl;
-            } else if (screens.find(name) != screens.end()) { //duplicate
+            printMenuCommands();
+            continue;
+        } else if (command.find("screen -s ") == 0) {
+            string name = command.substr(10);
+            if (name.empty()) {
+                cout << "Please provide a name for the screen session." << endl;
+            } else if (screens.find(name) != screens.end()) {
                 cout << "Screen session already exists: " << name << endl;
                 cout << "Created At: " << screens[name].timestamp << endl;
-            } else { //VALID
+            } else {
                 Console newScreen(name, 100);
                 screens[name] = newScreen;
                 cout << "New screen session created: " << name << endl;
-                screens[name].displayInfo();
+                screenSession(screens[name]);
             }
-        } 
-        //W3 NEW: resume screen session (screen -r <name>)
-        else if (command.find("screen -r ") == 0) {
-            string name = command.substr(10); // get <name>
-            if (name.empty()) { //empty <name>
-                cout << "Input name of the screen session" << endl;
-            } else if (screens.find(name) == screens.end()) { //not found
+        } else if (command.find("screen -r ") == 0) {
+            string name = command.substr(10);
+            if (name.empty()) {
+                cout << "Please provide a name to resume a screen session." << endl;
+            } else if (screens.find(name) == screens.end()) {
                 cout << "Screen session not found: " << name << endl;
-            } else { //VALID
-                while (true) {
-                    clearScreen();
-                    cout << "Resuming screen session: " << name << endl;
-                    screens[name].displayInfo();
-                    //TODO: actual functionality (e.g., incrementing current line, exiting the screen session etc.)
-                    //note: i think weneed to make yung actual int main commands a function so pwede icall dto
-                }
-                clearScreen();
+            } else {
+                screenSession(screens[name]);
             }
-        }
-        else if (command == "exit") { //TODO: exit command from screen, and exit from program
-            cout << "Exit command recognized. Exiting Program..." << endl;
-            break;
         } else {
             cout << "Unrecognized command. Please try again." << endl;
         }
-    } //while loop end
+    }
+}
+
+int main() {
+    map<string, Console> screens;
+    clearScreen();
+    menuSession(screens);
 
     return 0;
 }
