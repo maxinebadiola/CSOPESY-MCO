@@ -94,9 +94,11 @@ void screenSession(Console& screen) {
         cout << "\n" << screen.name << " > ";
         string screenCmd;
         getline(cin, screenCmd);
-
         if (screenCmd == "exit") {
-            cout << "Exiting screen session..." << endl; //TODO: fix menu reprinting
+            screen.currentLine++;
+            clearScreen();
+            printMenuCommands();
+            cout << "\nExiting screen session..." << endl; //TODO: fix menu reprinting
             break; 
         } else if (screenCmd == "clear" || screenCmd == "cls") {
             screen.currentLine++;
