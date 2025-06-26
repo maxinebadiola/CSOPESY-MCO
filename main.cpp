@@ -1,35 +1,63 @@
 #include <iostream>
 #include <string>
-#include <cstdlib> 
-//W3 NEW: libraries 
-#include <map> //screen sessions
-#include <ctime> //timestamps
-//W6 NEW: FCFS libraries
-#include <fstream>
+#include <vector>
 #include <queue>
 #include <thread>
 #include <mutex>
-#include <condition_variable>
+#include <chrono>
 #include <atomic>
-#include <sstream>
+#include <fstream>
 #include <iomanip>
+#include <ctime>
+#include <sstream>
+#include <memory> 
+#include <cstdlib> 
+#include <map>
 
 using namespace std;
+
+enum ProcessState {
+    READY,
+    RUNNING,
+    FINISHED
+};
+
+struct PCB {
+    int id;
+    string name;
+    ProcessState state;
+    time_t creation_time;
+    int instructions_total;
+    atomic<int> instructions_executed; 
+    string output_filename;
+    int core_id; 
+
+    PCB(int p_id, const string& p_name, ProcessState p_state, time_t p_creation_time, 
+        int p_instr_total, int p_instr_exec, const string& p_filename, int p_core_id)
+      : id(p_id), name(p_name), state(p_state), creation_time(p_creation_time),
+        instructions_total(p_instr_total), instructions_executed(p_instr_exec), 
+        output_filename(p_filename), core_id(p_core_id) {}
+};
+
+queue<PCB*> g_ready_queue;
+mutex g_ready_queue_mutex;
+
+vector<PCB*> g_running_processes; // Size will be set from config file
+vector<PCB*> g_finished_processes;
+mutex g_process_lists_mutex;
+
+atomic<bool> g_exit_flag(false);
+vector<unique_ptr<PCB>> g_process_storage;
+
+thread g_scheduler_thread;
+vector<thread> g_worker_threads;
+atomic<bool> g_threads_started(false);
+
+
 class Console; //forward declaration for W6 variables [DO NOT REMOVE]
 
-//W6: variables for FCFS scheduler-start
-const int totalCores = 4; //cpu cores for sched [0, 1, 2, 3]
-const int totalCommands = 100; //print commands per process
-const int totalProcesses = 10; //processes to simul
-// https://www.geeksforgeeks.org/cpp/std-mutex-in-cpp/
-mutex queueMutex; //sync queue
-mutex outputMutex; //sync console 
-condition_variable schedulerCv; //sched condition
-queue<string> processQueue; 
-atomic<bool> shutdownFlag(false); //for schedulter-stop (todo)
-map<string, bool> isRunning; 
-map<string, bool> isFinished; 
-map<string, int> completedCount; 
+//W6: variables for FCFS scheduler-start (old globals removed, replaced by above)
+mutex outputMutex; //sync console for logging
 map<string, Console> screens; 
 
 //config.txt variables
@@ -84,7 +112,6 @@ cout << "7. clear / cls" << endl;
 cout << "8. exit" << endl;
 }
 
-//W6 functions and threads
 string getCurrentTimestampWithMillis() {
     auto now = chrono::system_clock::now();
     auto now_ms = chrono::time_point_cast<chrono::milliseconds>(now);
@@ -104,77 +131,112 @@ string getCurrentTimestampWithMillis() {
     return ss.str();
 }
 
+string format_timestamp_for_display(time_t t) {
+    tm local_tm;
+    #ifdef _WIN64
+        localtime_s(&local_tm, &t);
+    #else
+        localtime_r(&t, &local_tm);
+    #endif
+    
+    stringstream ss;
+    ss << put_time(&local_tm, "(%m/%d/%Y, %I:%M:%S %p)");
+    return ss.str();
+}
+
 //COMMENT OUT THE FUNC BELOW FOR W6 SUBMISSION (will slow down program)
-void initializeLogs(const string& screenName, int processNum) {
-    string filename = "screen_" + screenName + "_process_" + to_string(processNum) + ".txt";
-    ofstream outFile(filename);
+void initializeLogs(PCB* process) {
+    if (process->output_filename.empty()) return;
+    ofstream outFile(process->output_filename);
     if (outFile.is_open()) {
-        outFile << "Process name: " << screenName << "_" << processNum << endl;
+        outFile << "Process name: " << process->name << endl;
         outFile << "Logs:" << endl;
     }
 }
 //COMMENT OUT THE FUNC BELOW FOR W6 SUBMISSION (will slow down program)
-void exportLogs(const string& screenName, int processNum, int coreId, const string& message) {
+void exportLogs(PCB* process, int coreId, const string& message) {
+    if (process->output_filename.empty()) return;
     lock_guard<mutex> lock(outputMutex);
-    string filename = "screen_" + screenName + "_process_" + to_string(processNum) + ".txt";
-    ofstream outFile(filename, ios::app);
+    ofstream outFile(process->output_filename, ios::app);
     if (outFile.is_open()) {
         outFile << getCurrentTimestampWithMillis() << " Core:" << coreId << " \"" << message << "\"" << endl;
     }
 }
 
-void workerThread(int coreId) {
-    while (!shutdownFlag) {
-        unique_lock<mutex> lock(queueMutex);
-        schedulerCv.wait(lock, [] { return !processQueue.empty() || shutdownFlag; });
+// New FCFS Core Logic
+void worker_thread(int core_id) {
+    while (!g_exit_flag) {
+        PCB* current_process = nullptr;
+        {
+            lock_guard<mutex> lock(g_process_lists_mutex);
+            if (core_id < g_running_processes.size()) {
+                current_process = g_running_processes[core_id];
+            }
+        }
 
-        if (!processQueue.empty()) {
-            string processName = processQueue.front();
-            processQueue.pop();
-            isRunning[processName] = true;
-            lock.unlock();
-
-            // Extract screen name and process number
-            size_t underscore_pos = processName.find_last_of('_');
-            string screenName = processName.substr(0, underscore_pos);
-            int processNum = stoi(processName.substr(underscore_pos + 1));
-
-            // Initialize log file if it doesn't exist
-            initializeLogs(screenName, processNum);
-
-            // Process the commands
-            for (int i = 0; i < totalCommands; i++) {
+        if (current_process != nullptr) {
+            initializeLogs(current_process);
+            
+            while (current_process->instructions_executed < current_process->instructions_total) {
+                if (g_exit_flag) break;
+                
+                // Use delay from config file
+                this_thread::sleep_for(chrono::milliseconds(config_delay_per_exec));
+                
                 stringstream msg;
-                msg << "Printing from " << processName << "! Command " << (i + 1) << "/" << totalCommands;
-                exportLogs(screenName, processNum, coreId, msg.str());
-                
-                // Simulate processing time
-                this_thread::sleep_for(chrono::milliseconds(10));
-                
-                completedCount[processName]++;
+                msg << "Executing instruction for " << current_process->name << "! (" 
+                    << (current_process->instructions_executed.load() + 1) << "/" 
+                    << current_process->instructions_total << ")";
+                exportLogs(current_process, core_id, msg.str());
+
+                current_process->instructions_executed++;
             }
 
-            lock.lock();
-            isRunning[processName] = false;
-            isFinished[processName] = true;
-            lock.unlock();
+            if (!g_exit_flag) {
+                lock_guard<mutex> lock(g_process_lists_mutex);
+                current_process->state = FINISHED;
+                g_finished_processes.push_back(current_process);
+                g_running_processes[core_id] = nullptr;
+            }
+        } else {
+            this_thread::sleep_for(chrono::milliseconds(100));
         }
     }
 }
 
 void schedulerThread() {
-    vector<thread> workers;
-    for (int i = 0; i < totalCores; i++) {
-        workers.emplace_back(workerThread, i);
-    }
+    while (!g_exit_flag) {
+        PCB* process_to_schedule = nullptr;
 
-    while (!shutdownFlag) {
-        this_thread::sleep_for(chrono::seconds(1));
-    }
+        {
+            lock_guard<mutex> lock(g_ready_queue_mutex);
+            if (!g_ready_queue.empty()) {
+                process_to_schedule = g_ready_queue.front();
+                g_ready_queue.pop();
+            }
+        }
 
-    for (auto& worker : workers) {
-        if (worker.joinable()) {
-            worker.join();
+        if (process_to_schedule != nullptr) {
+            bool scheduled = false;
+            while (!scheduled && !g_exit_flag) {
+                {
+                    lock_guard<mutex> lock(g_process_lists_mutex);
+                    for (int i = 0; i < config_num_cpu; ++i) { // Use config_num_cpu
+                        if (g_running_processes[i] == nullptr) {
+                            process_to_schedule->state = RUNNING;
+                            process_to_schedule->core_id = i;
+                            g_running_processes[i] = process_to_schedule;
+                            scheduled = true;
+                            break;
+                        }
+                    }
+                }
+                if (!scheduled) {
+                    this_thread::sleep_for(chrono::milliseconds(100));
+                }
+            }
+        } else {
+            this_thread::sleep_for(chrono::milliseconds(100));
         }
     }
 }
@@ -188,33 +250,23 @@ void clearScreen() {
    printHeader();
 }
    
-//W3 NEW: screen console class
-//  "screen -r <name>" / "screen -s <name>" - Display a placeholder info that contains the following:
-//     1. Process name
-//     2. Current line of instruction / Total line of instruction.
-//     3. Timestamp of when the screen is created in (MM/DD/YYYY, HH:MM:SS AM/PM) format.
 class Console {
 public:
     string name;
     int currentLine;
     int totalLines;
     string timestamp;
-
-    //default constructor
     Console() : name(""), currentLine(0), totalLines(0), timestamp("") {}
-
     Console(const string& name, int total) {
         this->name = name;
         currentLine = 0;
         totalLines = total;
-        //HH:MM:SS AM/PM
-        time_t now = time(0); //https://cplusplus.com/reference/ctime/time/
+        time_t now = time(0);
         tm* localTime = localtime(&now); 
         char buffer[100];
         strftime(buffer, sizeof(buffer), "%m/%d/%Y, %I:%M:%S %p", localTime);
         timestamp = buffer;
     }
-
     void displayInfo() {
         cout << "Process Name: " << name << endl;
         cout << "Current Line: " << currentLine << " / " << totalLines << endl;
@@ -222,17 +274,16 @@ public:
     }
 };
 
-//W6 NEW: process progress console output (screen -ls)
 void printSchedProgress() {
+    lock_guard<mutex> lock(g_process_lists_mutex);
     cout << "\n==== RUNNING PROCESSES ====" << endl;
     bool anyRunning = false;
-    for (const auto& pair : screens) {
-        const string& name = pair.first;
-        const Console& console = pair.second;
-        if (isRunning[name] && !isFinished[name]) {
-            cout << name << " " << getCurrentTimestampWithMillis() << " Core: " 
-                 << (completedCount[name] % totalCores) << " " 
-                 << completedCount[name] << "/" << totalCommands << endl;
+    for (int i = 0; i < config_num_cpu; ++i) { // Use config_num_cpu
+        PCB* p = g_running_processes[i];
+        if (p != nullptr) {
+            cout << p->name << "\t" << format_timestamp_for_display(p->creation_time) << "\t"
+                 << "Core: " << p->core_id << "\t"
+                 << p->instructions_executed << " / " << p->instructions_total << endl;
             anyRunning = true;
         }
     }
@@ -242,34 +293,38 @@ void printSchedProgress() {
 
     cout << "\n==== FINISHED PROCESSES ====" << endl;
     bool anyFinished = false;
-    for (const auto& pair : screens) {
-        const string& name = pair.first;
-        const Console& console = pair.second;
-        if (isFinished[name]) {
-            cout << name << " " << console.timestamp << " Finished " 
-                 << totalCommands << "/" << totalCommands << endl;
-            anyFinished = true;
-        }
+    for (const auto& p : g_finished_processes) {
+        cout << p->name << "\t" << format_timestamp_for_display(p->creation_time) << "\t"
+             << "Finished\t"
+             << p->instructions_executed << " / " << p->instructions_total << endl;
+        anyFinished = true;
     }
     if (!anyFinished) {
         cout << "No finished processes" << endl;
     }
 }
 
+// Rewritten to use config values and new PCB structure
 void createTestProcesses(const string& screenName) {
-    lock_guard<mutex> lock(queueMutex);
-    for (int i = 1; i <= totalProcesses; i++) {
-        string processName = screenName + "_" + (i < 10 ? "0" + to_string(i) : to_string(i));
-        if (screens.find(processName) == screens.end()) {
-            Console newScreen(processName, totalCommands);
-            screens[processName] = newScreen;
-        }
-        processQueue.push(processName);
-        isRunning[processName] = false;
-        isFinished[processName] = false;
-        completedCount[processName] = 0;
+    lock_guard<mutex> lock(g_ready_queue_mutex);
+    
+    int current_process_count = g_process_storage.size();
+    
+    // Use config_batch_process_freq to determine how many processes to create
+    for (int i = 0; i < config_batch_process_freq; ++i) {
+        int process_id = current_process_count + i;
+        string processName = screenName + "_" + (process_id + 1 < 10 ? "0" : "") + to_string(process_id + 1);
+        string filename = "screen_" + processName + ".txt";
+
+        // Use config values for instruction count
+        int instructions = rand() % (config_max_ins - config_min_ins + 1) + config_min_ins;
+
+        g_process_storage.push_back(make_unique<PCB>(
+            process_id, processName, READY, time(0), instructions, 0, filename, -1
+        ));
+
+        g_ready_queue.push(g_process_storage.back().get());
     }
-    schedulerCv.notify_all();
 }
 
 //W3 NEW: screen handling
@@ -287,7 +342,7 @@ void screenSession(Console& screen) {
             screen.currentLine++;
             clearScreen();
             printMenuCommands();
-            cout << "\nExiting screen session..." << endl; //TODO: fix menu reprinting
+            cout << "\nExiting screen session..." << endl;
             break; 
         } else if (screenCmd == "clear" || screenCmd == "cls") {
             screen.currentLine++;
@@ -296,19 +351,21 @@ void screenSession(Console& screen) {
             screen.displayInfo();
             printScreenCommands();
             continue;
-        } else if (screen.currentLine >= screen.totalLines) {
-            cout << "100 lines executed. No more commands can be run." << endl;
-        } else if (screenCmd == "initialize") {
-            cout << "Initialize command recognized." << endl;
-            screen.currentLine++;
-        } else if (screenCmd == "scheduler-start") 
-        {
-            createTestProcesses(screen.name); //W6 simulate FCFS processing
-            cout << "Started FCFS scheduling for " << totalProcesses << " processes" << endl;
+        } else if (screenCmd == "scheduler-start") {
+            if (!g_threads_started) {
+                cout << "Starting scheduler and " << config_num_cpu << " CPU cores for the first time..." << endl;
+                g_scheduler_thread = thread(schedulerThread);
+                for (int i = 0; i < config_num_cpu; ++i) {
+                    g_worker_threads.emplace_back(worker_thread, i);
+                }
+                g_threads_started = true;
+            }
+            createTestProcesses(screen.name);
+            cout << "Added " << config_batch_process_freq << " new processes to the scheduling queue." << endl;
             screen.currentLine++;
         } 
-        else if (screenCmd == "scheduler-stop") { //W6 TODO (not in specs)
-            cout << "Scheduler-stop command recognized." << endl;
+        else if (screenCmd == "scheduler-stop") {
+            cout << "Scheduler-stop command recognized. (Note: use 'exit' in main menu to stop all processes)" << endl;
             screen.currentLine++;
         } else if (screenCmd == "report-util") {
             cout << "Report-util command recognized." << endl;
@@ -346,6 +403,7 @@ void menuSession() {
             if (command == "initialize") {
                 initialized = true;
                 readConfigFile();
+                g_running_processes.assign(config_num_cpu, nullptr);
                 clearScreen();
                 printMenuCommands();
                 printConfigVars();
@@ -378,6 +436,8 @@ void menuSession() {
                 screens[name] = newScreen;
                 cout << "New screen session created: " << name << endl;
                 screenSession(screens[name]);
+                clearScreen();
+                printMenuCommands();
             }
         } else if (command.find("screen -r ") == 0) {
             string name = command.substr(10);
@@ -387,6 +447,8 @@ void menuSession() {
                 cout << "Screen session not found: " << name << endl;
             } else {
                 screenSession(screens[name]);
+                clearScreen();
+                printMenuCommands();
             }
         } else {
             cout << "Unrecognized command. Please try again." << endl;
@@ -424,7 +486,7 @@ void readConfigFile() {
 }
 //FOR TESTING
 void printConfigVars() {
-    cout << "\n[CONFIG VALUES]" << endl;
+    cout << "\n[CONFIG VALUES LOADED]" << endl;
     cout << "num-cpu: " << config_num_cpu << endl;
     cout << "scheduler: " << config_scheduler << endl;
     cout << "quantum-cycles: " << config_quantum_cycles << endl;
@@ -435,8 +497,7 @@ void printConfigVars() {
 }
 
 int main() {
-    //clearScreen(); // Will be called in menuSession
+    srand(time(0)); // Seed random number generator
     menuSession();
-
     return 0;
 }
