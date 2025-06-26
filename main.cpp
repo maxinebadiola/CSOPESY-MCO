@@ -32,6 +32,17 @@ map<string, bool> isFinished;
 map<string, int> completedCount; 
 map<string, Console> screens; 
 
+//config.txt variables
+int config_num_cpu;
+string config_scheduler;
+int config_quantum_cycles;
+int config_batch_process_freq;
+int config_min_ins;
+int config_max_ins;
+int config_delay_per_exec;
+
+void printConfigVars();
+void readConfigFile();
 
 void printHeader() {
     cout << R"(
@@ -44,6 +55,12 @@ void printHeader() {
 
                   CSOPESY CLI EMULATOR
 )" << endl;
+}
+
+void printInitial()
+{
+   cout << "1. initialize" << endl;
+   cout << "2. exit" << endl;
 }
 
 void printMenuCommands() {
@@ -312,13 +329,35 @@ void screenSession(Console& screen) {
 
 //W3 NEW: main menu
 void menuSession() {
-    printMenuCommands();
-    thread scheduler(schedulerThread); //W6 NEW: start scheduler thread
+    bool initialized = false;
+    bool firstLoad = true;
+    // Only print header and initial menu once
     while (true) {
-
+        if (!initialized && firstLoad) {
+            printHeader();
+            printInitial();
+            firstLoad = false;
+        }
         cout << "\n> ";
         string command;
         getline(cin, command);
+
+        if (!initialized) {
+            if (command == "initialize") {
+                initialized = true;
+                readConfigFile();
+                clearScreen();
+                printMenuCommands();
+                printConfigVars();
+                continue;
+            } else if (command == "exit") {
+                cout << "Exiting program..." << endl;
+                break;
+            } else {
+                cout << "Please type 'initialize' to start or 'exit' to quit." << endl;
+                continue;
+            }
+        }
 
         if (command == "exit") {
             cout << "Exiting program..." << endl;
@@ -355,8 +394,48 @@ void menuSession() {
     }
 }
 
+void readConfigFile() {
+    ifstream configFile("config.txt");
+    string key;
+    while (configFile >> key) {
+        if (key == "num-cpu") {
+            configFile >> config_num_cpu;
+        } else if (key == "scheduler") {
+            string sched;
+            configFile >> ws;
+            getline(configFile, sched, '"'); // skip first quote
+            getline(configFile, sched, '"'); // get value inside quotes
+            config_scheduler = sched;
+        } else if (key == "quantum-cycles") {
+            configFile >> config_quantum_cycles;
+        } else if (key == "batch-process-freq") {
+            configFile >> config_batch_process_freq;
+        } else if (key == "min-ins") {
+            configFile >> config_min_ins;
+        } else if (key == "max-ins") {
+            configFile >> config_max_ins;
+        } else if (key == "delay-per-exec") {
+            configFile >> config_delay_per_exec;
+        } else {
+            string skip;
+            configFile >> skip;
+        }
+    }
+}
+//FOR TESTING
+void printConfigVars() {
+    cout << "\n[CONFIG VALUES]" << endl;
+    cout << "num-cpu: " << config_num_cpu << endl;
+    cout << "scheduler: " << config_scheduler << endl;
+    cout << "quantum-cycles: " << config_quantum_cycles << endl;
+    cout << "batch-process-freq: " << config_batch_process_freq << endl;
+    cout << "min-ins: " << config_min_ins << endl;
+    cout << "max-ins: " << config_max_ins << endl;
+    cout << "delay-per-exec: " << config_delay_per_exec << endl;
+}
+
 int main() {
-    clearScreen();
+    //clearScreen(); // Will be called in menuSession
     menuSession();
 
     return 0;
