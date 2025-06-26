@@ -175,7 +175,7 @@ void worker_thread(int core_id) {
         }
 
         if (current_process != nullptr) {
-            initializeLogs(current_process);
+            //initializeLogs(current_process);
             
             while (current_process->instructions_executed < current_process->instructions_total) {
                 if (g_exit_flag) break;
@@ -183,11 +183,11 @@ void worker_thread(int core_id) {
                 // Use delay from config file
                 this_thread::sleep_for(chrono::milliseconds(config_delay_per_exec));
                 
-                stringstream msg;
-                msg << "Executing instruction for " << current_process->name << "! (" 
-                    << (current_process->instructions_executed.load() + 1) << "/" 
-                    << current_process->instructions_total << ")";
-                exportLogs(current_process, core_id, msg.str());
+                //stringstream msg;
+                //msg << "Executing instruction for " << current_process->name << "! (" 
+                //    << (current_process->instructions_executed.load() + 1) << "/" 
+                //    << current_process->instructions_total << ")";
+                //exportLogs(current_process, core_id, msg.str());
 
                 current_process->instructions_executed++;
             }
