@@ -274,34 +274,43 @@ public:
     }
 };
 
-void printSchedProgress() {
+string getSystemReport() {
     lock_guard<mutex> lock(g_process_lists_mutex);
-    cout << "\n==== RUNNING PROCESSES ====" << endl;
+    stringstream ss;
+
+    ss << "==== CPU UTILIZATION REPORT ====\n";
+    ss << "Total Cores: " << config_num_cpu << endl;
+    int used_cores = 0;
+    for (int i = 0; i < config_num_cpu; ++i) {
+        if (g_running_processes[i] != nullptr) used_cores++;
+    }
+    ss << "Used Cores: " << used_cores << endl;
+    ss << "Available Cores: " << (config_num_cpu - used_cores) << endl;
+
+    ss << "\n==== RUNNING PROCESSES ====\n";
     bool anyRunning = false;
-    for (int i = 0; i < config_num_cpu; ++i) { // Use config_num_cpu
+    for (int i = 0; i < config_num_cpu; ++i) {
         PCB* p = g_running_processes[i];
         if (p != nullptr) {
-            cout << p->name << "\t" << format_timestamp_for_display(p->creation_time) << "\t"
-                 << "Core: " << p->core_id << "\t"
-                 << p->instructions_executed << " / " << p->instructions_total << endl;
+            ss << p->name << "\t" << format_timestamp_for_display(p->creation_time) << "\t"
+               << "Core: " << p->core_id << "\t"
+               << p->instructions_executed << " / " << p->instructions_total << endl;
             anyRunning = true;
         }
     }
-    if (!anyRunning) {
-        cout << "No running processes" << endl;
-    }
+    if (!anyRunning) ss << "No running processes\n";
 
-    cout << "\n==== FINISHED PROCESSES ====" << endl;
+    ss << "\n==== FINISHED PROCESSES ====\n";
     bool anyFinished = false;
     for (const auto& p : g_finished_processes) {
-        cout << p->name << "\t" << format_timestamp_for_display(p->creation_time) << "\t"
-             << "Finished\t"
-             << p->instructions_executed << " / " << p->instructions_total << endl;
+        ss << p->name << "\t" << format_timestamp_for_display(p->creation_time) << "\t"
+           << "Finished\t"
+           << p->instructions_executed << " / " << p->instructions_total << endl;
         anyFinished = true;
     }
-    if (!anyFinished) {
-        cout << "No finished processes" << endl;
-    }
+    if (!anyFinished) ss << "No finished processes\n";
+
+    return ss.str();
 }
 
 // Rewritten to use config values and new PCB structure
@@ -368,14 +377,87 @@ void screenSession(Console& screen) {
             cout << "Scheduler-stop command recognized. (Note: use 'exit' in main menu to stop all processes)" << endl;
             screen.currentLine++;
         } else if (screenCmd == "report-util") {
-            cout << "Report-util command recognized." << endl;
             screen.currentLine++;
+
+            string report = getSystemReport();
+
+            // Print to console
+            cout << report;
+
+            // Export to file
+            ofstream outFile("csopesy-log.txt", ios::app); // append mode
+            if (outFile.is_open()) {
+                outFile << "=== SYSTEM REPORT SAVED AT " << getCurrentTimestampWithMillis() << " ===\n";
+                outFile << report << endl;
+                outFile.close();
+                cout << "Report saved to csopesy-log.txt" << endl;
+            } else {
+                cout << "Failed to save report to file." << endl;
+            }
         } else if (screenCmd == "screen") {
             screen.currentLine++;
             screen.displayInfo();
-        } else if (screenCmd == "screen -ls") { //W6 NEW: list running processes
-            printSchedProgress();
+        } else if (screenCmd == "screen -ls") {
             screen.currentLine++;
+            string report = getSystemReport();
+            cout << report;
+        }
+        else if (screenCmd == "process-smi") {
+            screen.currentLine++;
+
+            PCB* currentProcess = nullptr;
+            {
+                lock_guard<mutex> lock(g_process_lists_mutex);
+                for (int i = 0; i < config_num_cpu; ++i) {
+                    if (g_running_processes[i] && g_running_processes[i]->name.find(screen.name) != string::npos) {
+                        currentProcess = g_running_processes[i];
+                        break;
+                    }
+                }
+                if (!currentProcess) {
+                    for (const auto& p : g_finished_processes) {
+                        if (p->name.find(screen.name) != string::npos) {
+                            currentProcess = p;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (currentProcess) {
+                cout << "\n==== PROCESS-SMI ====" << endl;
+                cout << "Name: " << currentProcess->name << endl;
+                cout << "ID: " << currentProcess->id << endl;
+                cout << "State: ";
+                switch(currentProcess->state) {
+                    case READY: cout << "READY"; break;
+                    case RUNNING: cout << "RUNNING"; break;
+                    case FINISHED: cout << "FINISHED"; break;
+                }
+                cout << endl;
+
+                cout << "Created At: " << format_timestamp_for_display(currentProcess->creation_time) << endl;
+                cout << "Instructions: " << currentProcess->instructions_executed.load() 
+                    << " / " << currentProcess->instructions_total << endl;
+
+                if (currentProcess->state == FINISHED) {
+                    cout << "Status: Finished!" << endl;
+                }
+
+                ifstream inFile(currentProcess->output_filename);
+                if (inFile.is_open()) {
+                    string line;
+                    cout << "\n==== LOGS ====" << endl;
+                    while (getline(inFile, line)) {
+                        cout << line << endl;
+                    }
+                    inFile.close();
+                } else {
+                    cout << "No logs available yet." << endl;
+                }
+            } else {
+                cout << "No process found associated with this screen." << endl;
+            }
         }
         else {
             cout << "Unrecognized command. Please try again." << endl;
