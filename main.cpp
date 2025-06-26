@@ -17,7 +17,7 @@
 using namespace std;
 class Console; //forward declaration for W6 variables [DO NOT REMOVE]
 
-//W6: variables for FCFS scheduler-test
+//W6: variables for FCFS scheduler-start
 const int totalCores = 4; //cpu cores for sched [0, 1, 2, 3]
 const int totalCommands = 100; //print commands per process
 const int totalProcesses = 10; //processes to simul
@@ -73,15 +73,15 @@ void printMenuCommands() {
 }
 
 void printScreenCommands() {
-   cout << "==== SCREEN COMMANDS ====" << endl;
-   cout << "1. initialize" << endl;
-   cout << "2. scheduler-test" << endl; //W6 simulate FCFS processing
-   cout << "3. scheduler-stop" << endl;
-   cout << "4. report-util" << endl;
-   cout << "5. screen" << endl;
-   cout << "6. screen -ls" << endl; //W6 print running processes
-   cout << "7. clear / cls" << endl; 
-   cout << "8. exit" << endl;
+cout << "==== SCREEN COMMANDS ====" << endl;
+cout << "1. scheduler-start" << endl; //continously generate basic process instructions
+cout << "2. scheduler-stop" << endl; //stops generating processes
+cout << "3. screen -ls" << endl; //cpu utilization report, list of processes
+cout << "4. report-util" << endl; //same as screen -ls but exports to csopesy-log.txt
+cout << "5. process-smi" << endl; //simple information about the process
+cout << "6. screen" << endl; //not really needed for MO1 tbh
+cout << "7. clear / cls" << endl; 
+cout << "8. exit" << endl;
 }
 
 //W6 functions and threads
@@ -301,7 +301,7 @@ void screenSession(Console& screen) {
         } else if (screenCmd == "initialize") {
             cout << "Initialize command recognized." << endl;
             screen.currentLine++;
-        } else if (screenCmd == "scheduler-test") 
+        } else if (screenCmd == "scheduler-start") 
         {
             createTestProcesses(screen.name); //W6 simulate FCFS processing
             cout << "Started FCFS scheduling for " << totalProcesses << " processes" << endl;
