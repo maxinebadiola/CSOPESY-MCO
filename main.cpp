@@ -13,6 +13,8 @@
 #include <memory> 
 #include <cstdlib> 
 #include <map>
+#include <unordered_map>
+#include <random>
 
 using namespace std;
 
@@ -73,6 +75,11 @@ int config_batch_process_freq;
 int config_min_ins;
 int config_max_ins;
 int config_delay_per_exec;
+//for basic program instructions (DECLARE, ADD, SUBTRACT, PRINT etc.)
+std::unordered_map<std::string, uint16_t> variables;
+std::random_device rd;
+std::mt19937 gen(rd());
+std::uniform_int_distribution<uint16_t> dist(0, 65535);
 
 SchedulerType current_scheduler_type;
 
@@ -152,23 +159,22 @@ string format_timestamp_for_display(time_t t) {
 }
 
 //COMMENT OUT THE FUNC BELOW FOR W6 SUBMISSION (will slow down program)
-void initializeLogs(PCB* process) {
-    if (process->output_filename.empty()) return;
-    ofstream outFile(process->output_filename);
-    if (outFile.is_open()) {
-        outFile << "Process name: " << process->name << endl;
-        outFile << "Logs:" << endl;
-    }
-}
-//COMMENT OUT THE FUNC BELOW FOR W6 SUBMISSION (will slow down program)
-void exportLogs(PCB* process, int coreId, const string& message) {
-    if (process->output_filename.empty()) return;
-    lock_guard<mutex> lock(outputMutex);
-    ofstream outFile(process->output_filename, ios::app);
-    if (outFile.is_open()) {
-        outFile << getCurrentTimestampWithMillis() << " Core:" << coreId << " \"" << message << "\"" << endl;
-    }
-}
+// void initializeLogs(PCB* process) {
+//     if (process->output_filename.empty()) return;
+//     ofstream outFile(process->output_filename);
+//     if (outFile.is_open()) {
+//         outFile << "Process name: " << process->name << endl;
+//         outFile << "Logs:" << endl;
+//     }
+// }
+// void exportLogs(PCB* process, int coreId, const string& message) {
+//     if (process->output_filename.empty()) return;
+//     lock_guard<mutex> lock(outputMutex);
+//     ofstream outFile(process->output_filename, ios::app);
+//     if (outFile.is_open()) {
+//         outFile << getCurrentTimestampWithMillis() << " Core:" << coreId << " \"" << message << "\"" << endl;
+//     }
+// }
 
 // FCFS
 void fcfs_worker_thread(int core_id) {
@@ -459,6 +465,7 @@ void createTestProcesses(const string& screenName) {
     }
 }
 
+//
 //W3 NEW: screen handling
 void screenSession(Console& screen) {
     clearScreen(); 
@@ -720,6 +727,85 @@ void printConfigVars() {
     cout << "min-ins: " << config_min_ins << endl;
     cout << "max-ins: " << config_max_ins << endl;
     cout << "delay-per-exec: " << config_delay_per_exec << endl;
+}
+
+//BASIC PROGRAM INSTRUCTIONS
+//change variable value 
+void DECLARE(const std::string& var, uint16_t value) {
+    variables[var] = value;
+}
+
+//get value of variable or convert string to uint16
+uint16_t getValue(const std::string& varOrValue) {
+    if (variables.count(varOrValue)) return variables[varOrValue];
+      return static_cast<uint16_t>(std::stoi(varOrValue));    
+}
+
+
+//ADD: var1 = op2 + op3 (op2/op3 can be variable or value)
+void ADD(const std::string& var1, const std::string& op2, const std::string& op3) {
+    if (!variables.count(var1)) variables[var1] = 0;
+    uint16_t val2 = getValue(op2);
+    uint16_t val3 = getValue(op3);
+    uint32_t sum = static_cast<uint32_t>(val2) + static_cast<uint32_t>(val3);
+    if (sum > 65535) sum = 65535;
+    variables[var1] = static_cast<uint16_t>(sum);
+}
+
+//SUBTRACT: var1 = op2 - op3 (op2/op3 can be variable or value)
+void SUBTRACT(const std::string& var1, const std::string& op2, const std::string& op3) {
+    if (!variables.count(var1)) variables[var1] = 0;
+    uint16_t val2 = getValue(op2);
+    uint16_t val3 = getValue(op3);
+    int32_t diff = static_cast<int32_t>(val2) - static_cast<int32_t>(val3);
+    if (diff < 0) diff = 0;
+    variables[var1] = static_cast<uint16_t>(diff);
+}
+
+//set var1/2/3 to default = 0 
+double setVariableDefault() {
+    for (auto& kv : variables) kv.second = 0;
+    return 0;
+}
+
+//pick random variable (1/2/3)
+std::string randomVariable() {
+    static const std::vector<std::string> vars = {"var1", "var2", "var3"};
+    std::uniform_int_distribution<int> pick(0, 2);
+    return vars[pick(gen)];
+}
+
+//pick random uint16 value
+std::string randomUint16Value() {
+    return std::to_string(dist(gen));
+}
+
+//pick var1/2/3 or random uint16 value
+std::string randomVarOrValue() {
+    if (dist(gen) % 2) return randomVariable();
+    return randomUint16Value();
+}
+
+// Print a message, always showing Value of (random variable) = (value)
+//TODO: Default print msg is "Hello World! from <screen/process name>"
+void PRINT(const std::string& var) {
+    if (variables.empty()) {
+        std::cout << "PRINT(var1)\nValue of \"var1\" = 0" << std::endl;
+        return;
+    }
+    std::cout << "PRINT(" << var << ")" << std::endl;
+    std::cout << "Value of \"" << var << "\" = " << variables[var] << std::endl;
+}
+
+//TODO: FOR(instruction, val) - randomly pick instruction and how many times to loop it, max 3x
+//TODO: SLEEP(X) - sleeps the current process for X (uint8) CPU ticks and relinquishes the CPU. 
+
+//print current values of var1, var2, var3
+void printVarValues() {
+    std::cout << "Values of\n";
+    std::cout << "var1 = " << variables["var1"] << std::endl;
+    std::cout << "var2 = " << variables["var2"] << std::endl;
+    std::cout << "var3 = " << variables["var3"] << std::endl;
 }
 
 int main() {
