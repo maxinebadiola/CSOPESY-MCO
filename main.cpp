@@ -279,13 +279,18 @@ string getSystemReport() {
     stringstream ss;
 
     ss << "==== CPU UTILIZATION REPORT ====\n";
-    ss << "Total Cores: " << config_num_cpu << endl;
     int used_cores = 0;
     for (int i = 0; i < config_num_cpu; ++i) {
         if (g_running_processes[i] != nullptr) used_cores++;
     }
-    ss << "Used Cores: " << used_cores << endl;
-    ss << "Available Cores: " << (config_num_cpu - used_cores) << endl;
+
+    // CPU Utilization
+    double cpu_utilization = (static_cast<double>(used_cores) / config_num_cpu) * 100.0;
+    ss << fixed << setprecision(1); // show one decimal place
+    ss << "CPU Utilization: " << cpu_utilization << "%\n";
+
+    ss << "Cores Used: " << used_cores << endl;
+    ss << "Cores available: " << (config_num_cpu - used_cores) << endl;
 
     ss << "\n==== RUNNING PROCESSES ====\n";
     bool anyRunning = false;
