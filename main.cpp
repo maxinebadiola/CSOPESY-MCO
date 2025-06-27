@@ -176,6 +176,263 @@ string format_timestamp_for_display(time_t t) {
 //     }
 // }
 
+//BASIC PROGRAM INSTRUCTIONS
+//change variable value 
+void DECLARE(const std::string& var, uint16_t value) {
+    variables[var] = value;
+}
+
+//get value of variable or convert string to uint16
+uint16_t getValue(const std::string& varOrValue) {
+    if (variables.count(varOrValue)) return variables[varOrValue];
+    try {
+        return static_cast<uint16_t>(std::stoi(varOrValue));
+    } catch (const std::exception&) {
+        return 0; 
+    }
+}
+
+//ADD: var1 = op2 + op3 (op2/op3 can be variable or value)
+void ADD(const std::string& var1, const std::string& op2, const std::string& op3) {
+    if (!variables.count(var1)) variables[var1] = 0;
+    uint16_t val2 = getValue(op2);
+    uint16_t val3 = getValue(op3);
+    uint32_t sum = static_cast<uint32_t>(val2) + static_cast<uint32_t>(val3);
+    if (sum > 65535) sum = 65535;
+    variables[var1] = static_cast<uint16_t>(sum);
+}
+
+//SUBTRACT: var1 = op2 - op3 (op2/op3 can be variable or value)
+void SUBTRACT(const std::string& var1, const std::string& op2, const std::string& op3) {
+    if (!variables.count(var1)) variables[var1] = 0;
+    uint16_t val2 = getValue(op2);
+    uint16_t val3 = getValue(op3);
+    int32_t diff = static_cast<int32_t>(val2) - static_cast<int32_t>(val3);
+    if (diff < 0) diff = 0;
+    variables[var1] = static_cast<uint16_t>(diff);
+}
+
+//set var1/2/3 to default = 0 
+double setVariableDefault() {
+    for (auto& kv : variables) kv.second = 0;
+    return 0;
+}
+
+//pick random variable (1/2/3)
+std::string randomVariable() {
+    static const std::vector<std::string> vars = {"var1", "var2", "var3"};
+    std::uniform_int_distribution<int> pick(0, 2);
+    return vars[pick(gen)];
+}
+
+//pick random uint16 value
+std::string randomUint16Value() {
+    return std::to_string(dist(gen));
+}
+
+//pick var1/2/3 or random uint16 value
+std::string randomVarOrValue() {
+    if (dist(gen) % 2) return randomVariable();
+    return randomUint16Value();
+}
+
+// Print a message, always showing Value of (random variable) = (value)
+//TODO: Default print msg is "Hello World! from <screen/process name>"
+void PRINT(const std::string& msg, const std::string& process_name = "", const std::string& screen_name = "") {
+    std::string output = msg;
+    
+    if (msg.empty() && !process_name.empty()) {
+        output = "Hello world from " + process_name + "!";
+    }
+    
+    for (const auto& var : variables) {
+        std::string varName = var.first;
+        std::string varValue = std::to_string(var.second);
+        
+        size_t pos = 0;
+        while ((pos = output.find(varName, pos)) != std::string::npos) {
+            bool isWholeVar = true;
+            if (pos > 0 && (std::isalnum(output[pos - 1]) || output[pos - 1] == '_')) {
+                isWholeVar = false;
+            }
+            if (pos + varName.length() < output.length() && 
+                (std::isalnum(output[pos + varName.length()]) || output[pos + varName.length()] == '_')) {
+                isWholeVar = false;
+            }
+            
+            if (isWholeVar) {
+                output.replace(pos, varName.length(), varValue);
+                pos += varValue.length();
+            } else {
+                pos += varName.length();
+            }
+        }
+    }
+    
+    {
+        std::lock_guard<std::mutex> lock(outputMutex);
+        std::cout << output << std::endl;
+    }
+}
+
+//TODO: SLEEP(X) - sleeps the current process for X (uint8) CPU ticks and relinquishes the CPU. 
+void SLEEP(uint8_t ticks) {
+    if (ticks == 0) return;
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(config_delay_per_exec * ticks));
+}
+
+void executeInstructionSet(const std::vector<std::string>& instructions, int nestingLevel = 0);
+
+//TODO: FOR(instruction, val) - randomly pick instruction and how many times to loop it, max 3x
+void FOR(const std::vector<std::string>& instructions, int repeats, int nestingLevel = 0) {
+    if (nestingLevel >= 3) {
+        std::lock_guard<std::mutex> lock(outputMutex);
+        std::cout << "Maximum nesting level (3) reached. Skipping nested FOR loop." << std::endl;
+        return;
+    }
+
+    if (repeats < 0) repeats = 0;
+    if (repeats > 100) repeats = 100; 
+    
+    for (int i = 0; i < repeats; ++i) {
+        executeInstructionSet(instructions, nestingLevel + 1);
+        
+        if (g_exit_flag) break;
+    }
+}
+
+void executeInstructionSet(const std::vector<std::string>& instructions, int nestingLevel) {
+    for (const std::string& instruction : instructions) {
+        if (g_exit_flag) break; 
+        
+        std::istringstream iss(instruction);
+        std::string command;
+        iss >> command;
+        
+        if (command == "DECLARE") {
+            std::string var;
+            std::string valueStr;
+            if (iss >> var >> valueStr) {
+                try {
+                    uint16_t value = static_cast<uint16_t>(std::stoi(valueStr));
+                    DECLARE(var, value);
+                } catch (const std::exception&) {
+                    DECLARE(var, 0); // Default to 0 if parsing fails
+                }
+            }
+        }
+        else if (command == "ADD") {
+            std::string var1, op2, op3;
+            if (iss >> var1 >> op2 >> op3) {
+                ADD(var1, op2, op3);
+            }
+        }
+        else if (command == "SUBTRACT") {
+            std::string var1, op2, op3;
+            if (iss >> var1 >> op2 >> op3) {
+                SUBTRACT(var1, op2, op3);
+            }
+        }
+        else if (command == "PRINT") {
+            std::string msg;
+            std::getline(iss, msg);
+
+            if (!msg.empty()) {
+                msg.erase(0, msg.find_first_not_of(" \t"));
+                if (msg.length() >= 2 && msg.front() == '"' && msg.back() == '"') {
+                    msg = msg.substr(1, msg.length() - 2);
+                }
+            }
+            PRINT(msg);
+        }
+        else if (command == "SLEEP") {
+            std::string ticksStr;
+            if (iss >> ticksStr) {
+                try {
+                    uint8_t ticks = static_cast<uint8_t>(std::stoi(ticksStr));
+                    SLEEP(ticks);
+                } catch (const std::exception&) {
+                    // Skip invalid SLEEP commands
+                }
+            }
+        }
+        else if (command == "FOR") {
+            std::string line;
+            std::getline(iss, line);
+            
+            // Parse FOR command more carefully
+            size_t lastSpace = line.find_last_of(' ');
+            if (lastSpace != std::string::npos) {
+                std::string instructionsStr = line.substr(0, lastSpace);
+                std::string repeatsStr = line.substr(lastSpace + 1);
+                
+                instructionsStr.erase(0, instructionsStr.find_first_not_of(" \t"));
+                instructionsStr.erase(instructionsStr.find_last_not_of(" \t") + 1);
+                
+                int repeats = 0;
+                try {
+                    repeats = std::stoi(repeatsStr);
+                } catch (const std::exception&) {
+                    repeats = 0;
+                }
+                
+                std::vector<std::string> forInstructions;
+                std::istringstream instrStream(instructionsStr);
+                std::string singleInstr;
+                
+                while (std::getline(instrStream, singleInstr, ',')) {
+                    singleInstr.erase(0, singleInstr.find_first_not_of(" \t"));
+                    singleInstr.erase(singleInstr.find_last_not_of(" \t") + 1);
+                    if (!singleInstr.empty()) {
+                        forInstructions.push_back(singleInstr);
+                    }
+                }
+                
+                FOR(forInstructions, repeats, nestingLevel);
+            }
+        }
+    }
+}
+
+std::vector<std::string> generateRandomInstructions(const std::string& processName, int count) {
+    std::vector<std::string> instructions;
+    std::uniform_int_distribution<int> instrType(0, 4); // 5 types of instructions (removed one PRINT variant)
+    
+    for (int i = 0; i < count; ++i) {
+        switch (instrType(gen)) {
+            case 0: // DECLARE
+                instructions.push_back("DECLARE " + randomVariable() + " " + randomUint16Value());
+                break;
+            case 1: // ADD
+                instructions.push_back("ADD " + randomVariable() + " " + randomVarOrValue() + " " + randomVarOrValue());
+                break;
+            case 2: // SUBTRACT
+                instructions.push_back("SUBTRACT " + randomVariable() + " " + randomVarOrValue() + " " + randomVarOrValue());
+                break;
+            case 3: // PRINT with variable - proper format
+                {
+                    std::string var = randomVariable();
+                    instructions.push_back("PRINT \"Value of " + var + " is " + var + "\"");
+                }
+                break;
+            case 4: // PRINT default message
+                instructions.push_back("PRINT \"Hello world from " + processName + "!\"");
+                break;
+        }
+    }
+    
+    return instructions;
+}
+
+//print current values of var1, var2, var3
+void printVarValues() {
+    std::cout << "Values of\n";
+    std::cout << "var1 = " << variables["var1"] << std::endl;
+    std::cout << "var2 = " << variables["var2"] << std::endl;
+    std::cout << "var3 = " << variables["var3"] << std::endl;
+}
+
 // FCFS
 void fcfs_worker_thread(int core_id) {
     while (!g_exit_flag) {
@@ -188,23 +445,30 @@ void fcfs_worker_thread(int core_id) {
         }
 
         if (current_process != nullptr) {
-            //initializeLogs(current_process);
+            // Initialize process-specific variables (thread-local)
+            variables.clear();
+            variables["var1"] = 0;
+            variables["var2"] = 0;
+            variables["var3"] = 0;
             
-            while (current_process->instructions_executed < current_process->instructions_total) {
-                if (g_exit_flag) break;
-                
+            while (current_process->instructions_executed < current_process->instructions_total && !g_exit_flag) {
                 // Use delay from config file
                 this_thread::sleep_for(chrono::milliseconds(config_delay_per_exec));
                 
-                //stringstream msg;
-                //msg << "Executing instruction for " << current_process->name << "! (" 
-                //    << (current_process->instructions_executed.load() + 1) << "/" 
-                //    << current_process->instructions_total << ")";
-                //exportLogs(current_process, core_id, msg.str());
-
+                // Generate and execute one random instruction
+                std::vector<std::string> singleInstruction = generateRandomInstructions(current_process->name, 1);
+                try {
+                    executeInstructionSet(singleInstruction);
+                } catch (const std::exception& e) {
+                    // Handle any exceptions during instruction execution
+                    std::lock_guard<std::mutex> lock(outputMutex);
+                    std::cerr << "Error executing instruction in process " << current_process->name << ": " << e.what() << std::endl;
+                }
+                
                 current_process->instructions_executed++;
             }
-
+            
+            // Mark as finished
             if (!g_exit_flag) {
                 lock_guard<mutex> lock(g_process_lists_mutex);
                 current_process->state = FINISHED;
@@ -232,11 +496,28 @@ void rr_worker_thread(int core_id) {
             // Initialize quantum if this is a new process assignment
             if (current_process->remaining_quantum <= 0) {
                 current_process->remaining_quantum = config_quantum_cycles;
+                // Initialize process-specific variables when process starts (thread-local)
+                variables.clear();
+                variables["var1"] = 0;
+                variables["var2"] = 0;
+                variables["var3"] = 0;
             }
 
             // Execute one instruction
-            if (current_process->instructions_executed < current_process->instructions_total) {
+            if (current_process->instructions_executed < current_process->instructions_total && !g_exit_flag) {
+                // Use delay from config file
                 this_thread::sleep_for(chrono::milliseconds(config_delay_per_exec));
+                
+                // Generate and execute one instruction at a time for RR
+                std::vector<std::string> singleInstruction = generateRandomInstructions(current_process->name, 1);
+                try {
+                    executeInstructionSet(singleInstruction);
+                } catch (const std::exception& e) {
+                    // Handle any exceptions during instruction execution
+                    std::lock_guard<std::mutex> lock(outputMutex);
+                    std::cerr << "Error executing instruction in process " << current_process->name << ": " << e.what() << std::endl;
+                }
+                
                 current_process->instructions_executed++;
                 current_process->remaining_quantum--;
             }
@@ -266,8 +547,7 @@ void rr_worker_thread(int core_id) {
                     }
                 }
             }
-        } else {
-            // No process assigned to this core, sleep briefly
+        } else { // No process assigned to this core
             this_thread::sleep_for(chrono::milliseconds(10));
         }
     }
@@ -727,85 +1007,6 @@ void printConfigVars() {
     cout << "min-ins: " << config_min_ins << endl;
     cout << "max-ins: " << config_max_ins << endl;
     cout << "delay-per-exec: " << config_delay_per_exec << endl;
-}
-
-//BASIC PROGRAM INSTRUCTIONS
-//change variable value 
-void DECLARE(const std::string& var, uint16_t value) {
-    variables[var] = value;
-}
-
-//get value of variable or convert string to uint16
-uint16_t getValue(const std::string& varOrValue) {
-    if (variables.count(varOrValue)) return variables[varOrValue];
-      return static_cast<uint16_t>(std::stoi(varOrValue));    
-}
-
-
-//ADD: var1 = op2 + op3 (op2/op3 can be variable or value)
-void ADD(const std::string& var1, const std::string& op2, const std::string& op3) {
-    if (!variables.count(var1)) variables[var1] = 0;
-    uint16_t val2 = getValue(op2);
-    uint16_t val3 = getValue(op3);
-    uint32_t sum = static_cast<uint32_t>(val2) + static_cast<uint32_t>(val3);
-    if (sum > 65535) sum = 65535;
-    variables[var1] = static_cast<uint16_t>(sum);
-}
-
-//SUBTRACT: var1 = op2 - op3 (op2/op3 can be variable or value)
-void SUBTRACT(const std::string& var1, const std::string& op2, const std::string& op3) {
-    if (!variables.count(var1)) variables[var1] = 0;
-    uint16_t val2 = getValue(op2);
-    uint16_t val3 = getValue(op3);
-    int32_t diff = static_cast<int32_t>(val2) - static_cast<int32_t>(val3);
-    if (diff < 0) diff = 0;
-    variables[var1] = static_cast<uint16_t>(diff);
-}
-
-//set var1/2/3 to default = 0 
-double setVariableDefault() {
-    for (auto& kv : variables) kv.second = 0;
-    return 0;
-}
-
-//pick random variable (1/2/3)
-std::string randomVariable() {
-    static const std::vector<std::string> vars = {"var1", "var2", "var3"};
-    std::uniform_int_distribution<int> pick(0, 2);
-    return vars[pick(gen)];
-}
-
-//pick random uint16 value
-std::string randomUint16Value() {
-    return std::to_string(dist(gen));
-}
-
-//pick var1/2/3 or random uint16 value
-std::string randomVarOrValue() {
-    if (dist(gen) % 2) return randomVariable();
-    return randomUint16Value();
-}
-
-// Print a message, always showing Value of (random variable) = (value)
-//TODO: Default print msg is "Hello World! from <screen/process name>"
-void PRINT(const std::string& var) {
-    if (variables.empty()) {
-        std::cout << "PRINT(var1)\nValue of \"var1\" = 0" << std::endl;
-        return;
-    }
-    std::cout << "PRINT(" << var << ")" << std::endl;
-    std::cout << "Value of \"" << var << "\" = " << variables[var] << std::endl;
-}
-
-//TODO: FOR(instruction, val) - randomly pick instruction and how many times to loop it, max 3x
-//TODO: SLEEP(X) - sleeps the current process for X (uint8) CPU ticks and relinquishes the CPU. 
-
-//print current values of var1, var2, var3
-void printVarValues() {
-    std::cout << "Values of\n";
-    std::cout << "var1 = " << variables["var1"] << std::endl;
-    std::cout << "var2 = " << variables["var2"] << std::endl;
-    std::cout << "var3 = " << variables["var3"] << std::endl;
 }
 
 int main() {
