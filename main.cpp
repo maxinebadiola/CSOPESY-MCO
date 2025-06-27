@@ -22,6 +22,11 @@ enum ProcessState {
     FINISHED
 };
 
+enum SchedulerType {
+    FCFS,
+    RR
+};
+
 struct PCB {
     int id;
     string name;
@@ -31,12 +36,13 @@ struct PCB {
     atomic<int> instructions_executed; 
     string output_filename;
     int core_id; 
+    int remaining_quantum;
 
     PCB(int p_id, const string& p_name, ProcessState p_state, time_t p_creation_time, 
         int p_instr_total, int p_instr_exec, const string& p_filename, int p_core_id)
       : id(p_id), name(p_name), state(p_state), creation_time(p_creation_time),
         instructions_total(p_instr_total), instructions_executed(p_instr_exec), 
-        output_filename(p_filename), core_id(p_core_id) {}
+        output_filename(p_filename), core_id(p_core_id), remaining_quantum(0) {}
 };
 
 queue<PCB*> g_ready_queue;
@@ -53,7 +59,6 @@ thread g_scheduler_thread;
 vector<thread> g_worker_threads;
 atomic<bool> g_threads_started(false);
 
-
 class Console; //forward declaration for W6 variables [DO NOT REMOVE]
 
 //W6: variables for FCFS scheduler-start (old globals removed, replaced by above)
@@ -68,6 +73,8 @@ int config_batch_process_freq;
 int config_min_ins;
 int config_max_ins;
 int config_delay_per_exec;
+
+SchedulerType current_scheduler_type;
 
 void printConfigVars();
 void readConfigFile();
@@ -163,8 +170,8 @@ void exportLogs(PCB* process, int coreId, const string& message) {
     }
 }
 
-// New FCFS Core Logic
-void worker_thread(int core_id) {
+// FCFS
+void fcfs_worker_thread(int core_id) {
     while (!g_exit_flag) {
         PCB* current_process = nullptr;
         {
@@ -204,6 +211,62 @@ void worker_thread(int core_id) {
     }
 }
 
+// Round Robin
+void rr_worker_thread(int core_id) {
+    while (!g_exit_flag) {
+        PCB* current_process = nullptr;
+        {
+            lock_guard<mutex> lock(g_process_lists_mutex);
+            if (core_id < g_running_processes.size()) {
+                current_process = g_running_processes[core_id];
+            }
+        }
+
+        if (current_process != nullptr) {
+            // Initialize quantum if this is a new process assignment
+            if (current_process->remaining_quantum <= 0) {
+                current_process->remaining_quantum = config_quantum_cycles;
+            }
+
+            // Execute one instruction
+            if (current_process->instructions_executed < current_process->instructions_total) {
+                this_thread::sleep_for(chrono::milliseconds(config_delay_per_exec));
+                current_process->instructions_executed++;
+                current_process->remaining_quantum--;
+            }
+
+            // Check if process finished or quantum expired
+            bool process_finished = (current_process->instructions_executed >= current_process->instructions_total);
+            bool quantum_expired = (current_process->remaining_quantum <= 0);
+
+            if (process_finished || quantum_expired) {
+                lock_guard<mutex> lock(g_process_lists_mutex);
+                
+                if (process_finished) {
+                    // Process completed
+                    current_process->state = FINISHED;
+                    g_finished_processes.push_back(current_process);
+                    g_running_processes[core_id] = nullptr;
+                } else if (quantum_expired) {
+                    // Quantum expired, preempt the process
+                    current_process->state = READY;
+                    current_process->remaining_quantum = 0; // Reset quantum
+                    g_running_processes[core_id] = nullptr;
+                    
+                    // Add back to ready queue
+                    {
+                        lock_guard<mutex> ready_lock(g_ready_queue_mutex);
+                        g_ready_queue.push(current_process);
+                    }
+                }
+            }
+        } else {
+            // No process assigned to this core, sleep briefly
+            this_thread::sleep_for(chrono::milliseconds(10));
+        }
+    }
+}
+
 void stopAndResetScheduler() {
     g_exit_flag = true;
     if (g_scheduler_thread.joinable()) {
@@ -234,6 +297,7 @@ void schedulerThread() {
     while (!g_exit_flag) {
         PCB* process_to_schedule = nullptr;
 
+        // Get a process from ready queue
         {
             lock_guard<mutex> lock(g_ready_queue_mutex);
             if (!g_ready_queue.empty()) {
@@ -244,24 +308,32 @@ void schedulerThread() {
 
         if (process_to_schedule != nullptr) {
             bool scheduled = false;
+            
+            // Try to assign to an available core
             while (!scheduled && !g_exit_flag) {
                 {
                     lock_guard<mutex> lock(g_process_lists_mutex);
-                    for (int i = 0; i < config_num_cpu; ++i) { // Use config_num_cpu
+                    for (int i = 0; i < config_num_cpu; ++i) {
                         if (g_running_processes[i] == nullptr) {
                             process_to_schedule->state = RUNNING;
                             process_to_schedule->core_id = i;
+                            
+                            if (current_scheduler_type == RR) { // Reset quantum for RR
+                                process_to_schedule->remaining_quantum = config_quantum_cycles;
+                            }
+                            
                             g_running_processes[i] = process_to_schedule;
                             scheduled = true;
                             break;
                         }
                     }
                 }
-                if (!scheduled) {
-                    this_thread::sleep_for(chrono::milliseconds(100));
+                
+                if (!scheduled) { // All cores busy
+                    this_thread::sleep_for(chrono::milliseconds(50));
                 }
             }
-        } else {
+        } else { // No processes in ready queue
             this_thread::sleep_for(chrono::milliseconds(100));
         }
     }
@@ -314,9 +386,24 @@ string getSystemReport() {
     double cpu_utilization = (static_cast<double>(used_cores) / config_num_cpu) * 100.0;
     ss << fixed << setprecision(1); // show one decimal place
     ss << "CPU Utilization: " << cpu_utilization << "%\n";
-
     ss << "Cores Used: " << used_cores << endl;
     ss << "Cores available: " << (config_num_cpu - used_cores) << endl;
+    ss << "Scheduler: " << (current_scheduler_type == FCFS ? "First-Come-First-Served (FCFS)" : "Round Robin (RR)");
+    if (current_scheduler_type == RR) {
+        ss << " [Quantum: " << config_quantum_cycles << " cycles]";
+    }
+    ss << endl;
+
+    int ready_count = 0; // Ready queue size
+    {
+        lock_guard<mutex> ready_lock(g_ready_queue_mutex);
+        queue<PCB*> temp_queue = g_ready_queue;
+        while (!temp_queue.empty()) {
+            ready_count++;
+            temp_queue.pop();
+        }
+    }
+    ss << "Processes in Ready Queue: " << ready_count << endl;
 
     ss << "\n==== RUNNING PROCESSES ====\n";
     bool anyRunning = false;
@@ -325,7 +412,12 @@ string getSystemReport() {
         if (p != nullptr) {
             ss << p->name << "\t" << format_timestamp_for_display(p->creation_time) << "\t"
                << "Core: " << p->core_id << "\t"
-               << p->instructions_executed << " / " << p->instructions_total << endl;
+               << p->instructions_executed << " / " << p->instructions_total;
+            
+            if (current_scheduler_type == RR) {
+                ss << "\tQuantum Left: " << p->remaining_quantum;
+            }
+            ss << endl;
             anyRunning = true;
         }
     }
@@ -393,10 +485,16 @@ void screenSession(Console& screen) {
             continue;
         } else if (screenCmd == "scheduler-start") {
             if (!g_threads_started) {
-                cout << "Starting scheduler and " << config_num_cpu << " CPU cores for the first time..." << endl;
+                cout << "Starting " << config_scheduler << " scheduler with " << config_num_cpu << " CPU cores..." << endl;
+                
                 g_scheduler_thread = thread(schedulerThread);
+                
                 for (int i = 0; i < config_num_cpu; ++i) {
-                    g_worker_threads.emplace_back(worker_thread, i);
+                    if (current_scheduler_type == FCFS) {
+                        g_worker_threads.emplace_back(fcfs_worker_thread, i);
+                    } else {
+                        g_worker_threads.emplace_back(rr_worker_thread, i);
+                    }
                 }
                 g_threads_started = true;
             }
@@ -578,10 +676,22 @@ void readConfigFile() {
             configFile >> config_num_cpu;
         } else if (key == "scheduler") {
             string sched;
-            configFile >> ws;
-            getline(configFile, sched, '"'); // skip first quote
-            getline(configFile, sched, '"'); // get value inside quotes
+            configFile >> sched;
+            
+            if (sched.front() == '"' && sched.back() == '"') {
+                sched = sched.substr(1, sched.length() - 2);
+            }
+            
             config_scheduler = sched;
+            
+            if (sched == "fcfs" || sched == "FCFS") {
+                current_scheduler_type = FCFS;
+            } else if (sched == "rr" || sched == "RR") {
+                current_scheduler_type = RR;
+            } else {
+                current_scheduler_type = FCFS; // default to FCFS
+                cout << "Warning: Unknown scheduler type '" << sched << "', defaulting to FCFS" << endl;
+            }
         } else if (key == "quantum-cycles") {
             configFile >> config_quantum_cycles;
         } else if (key == "batch-process-freq") {
@@ -597,12 +707,14 @@ void readConfigFile() {
             configFile >> skip;
         }
     }
+    configFile.close();
 }
+
 //FOR TESTING
 void printConfigVars() {
     cout << "\n[CONFIG VALUES LOADED]" << endl;
     cout << "num-cpu: " << config_num_cpu << endl;
-    cout << "scheduler: " << config_scheduler << endl;
+    cout << "scheduler: " << config_scheduler << " (" << (current_scheduler_type == FCFS ? "FCFS" : "Round Robin") << ")" << endl;
     cout << "quantum-cycles: " << config_quantum_cycles << endl;
     cout << "batch-process-freq: " << config_batch_process_freq << endl;
     cout << "min-ins: " << config_min_ins << endl;
