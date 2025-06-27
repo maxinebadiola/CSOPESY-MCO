@@ -204,6 +204,32 @@ void worker_thread(int core_id) {
     }
 }
 
+void stopAndResetScheduler() {
+    g_exit_flag = true;
+    if (g_scheduler_thread.joinable()) {
+        g_scheduler_thread.join();
+    }
+
+    for (auto& worker : g_worker_threads) {
+        if (worker.joinable()) {
+            worker.join();
+        }
+    }
+    lock_guard<mutex> lock(g_process_lists_mutex);
+    while (!g_ready_queue.empty()) {
+        g_ready_queue.pop();
+    }
+    for (int i = 0; i < config_num_cpu; ++i) {
+        g_running_processes[i] = nullptr;
+    }
+
+    g_finished_processes.clear();
+    g_exit_flag = false;
+    g_threads_started = false;
+
+    cout << "Scheduler stopped and reset successfully." << endl;
+}
+
 void schedulerThread() {
     while (!g_exit_flag) {
         PCB* process_to_schedule = nullptr;
@@ -374,7 +400,8 @@ void screenSession(Console& screen) {
             screen.currentLine++;
         } 
         else if (screenCmd == "scheduler-stop") {
-            cout << "Scheduler-stop command recognized. (Note: use 'exit' in main menu to stop all processes)" << endl;
+            cout << "Stopping and resetting the scheduler..." << endl;
+            stopAndResetScheduler(); // Our new clean-and-reset function
             screen.currentLine++;
         } else if (screenCmd == "report-util") {
             screen.currentLine++;
