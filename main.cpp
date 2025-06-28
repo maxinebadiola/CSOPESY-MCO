@@ -87,6 +87,9 @@ std::unordered_map<std::string, uint16_t> variables;
 std::random_device rd;
 std::mt19937 gen(rd());
 std::uniform_int_distribution<uint16_t> dist(0, 65535);
+//if these instructions can be used in a process
+bool SLEEP = false;
+bool FOR = false;
 
 SchedulerType current_scheduler_type;
 
@@ -518,6 +521,23 @@ void createTestProcesses(const string& screenName) {
 
         g_ready_queue.push(g_process_storage.back().get());
     }
+}
+//randomly generate list of instructions for a PROCESS
+// 1: DECLARE, 2: PRINT, 3: ADD, 4: SUBTRACT, 5: SLEEP, 6: FOR
+// If bool SLEEP = false, NO 5. If bool FOR = false, NO 6
+vector<int> generateInstructionList() {
+    vector<int> possibleInstructions = {1, 2, 3, 4}; // 1: DECLARE, 2: PRINT, 3: ADD, 4: SUBTRACT
+    if (SLEEP) possibleInstructions.push_back(5);    // 5: SLEEP
+    if (FOR) possibleInstructions.push_back(6);      // 6: FOR
+
+    int listLength = rand() % (config_max_ins - config_min_ins + 1) + config_min_ins;
+    //amnt of instructions in the list is random, between config_min_ins and config_max_ins
+    vector<int> instructionList;
+    for (int i = 0; i < listLength; ++i) {
+        int idx = rand() % possibleInstructions.size();
+        instructionList.push_back(possibleInstructions[idx]);
+    }
+    return instructionList;
 }
 
 //
