@@ -963,11 +963,11 @@ void menuSession() {
                 cout << "Exiting program..." << endl;
                 break;
             }  else if (command == "enable SLEEP") {
-                SLEEP = true;
+                enable_sleep = true;
                 cout << "SLEEP enabled." << endl;
                 continue;
             } else if (command == "enable FOR") {
-                FOR = true;
+                enable_for = true;
                 cout << "FOR enabled." << endl;
                 continue;
             }
