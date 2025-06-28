@@ -110,8 +110,9 @@ void printMenuCommands() {
    cout << "Available Commands:" << endl;
    cout << "1. screen -s <name>" << endl;
    cout << "2. screen -r <name>" << endl;
-   cout << "3. clear / cls" << endl;
-   cout << "4. exit" << endl;
+   cout << "3. screen -ls" << endl; //cpu utilization report, list of processes
+   cout << "4. clear / cls" << endl;
+   cout << "5. exit" << endl;
 }
 
 void printScreenCommands() {
