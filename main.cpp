@@ -269,7 +269,7 @@ std::string randomVarOrValue() {
 }
 
 // Print a message, always showing Value of (random variable) = (value), Default print msg is "Hello World! from <screen/process name>"
-void PRINT(const std::string& msg, const std::string& process_name = "", const std::string& screen_name = "") {
+void PRINT(const std::string& msg, PCB* current_process = nullptr, const std::string& process_name = "", const std::string& screen_name = "") {
     std::string output = msg;
     
     if (msg.empty() && !process_name.empty()) {
@@ -300,7 +300,11 @@ void PRINT(const std::string& msg, const std::string& process_name = "", const s
         }
     }
     
-    {
+    if (current_process) {
+        // Store in process logs instead of printing
+        std::lock_guard<std::mutex> lock(outputMutex);
+        current_process->logs.push_back(output);
+    } else {
         std::lock_guard<std::mutex> lock(outputMutex);
         std::cout << output << std::endl;
     }
@@ -313,10 +317,10 @@ void SLEEP(uint8_t ticks) {
     std::this_thread::sleep_for(std::chrono::milliseconds(config_delay_per_exec * ticks));
 }
 
-void executeInstructionSet(const std::vector<std::string>& instructions, int nestingLevel = 0);
+void executeInstructionSet(const std::vector<std::string>& instructions, int nestingLevel, PCB* current_process);
 
 // FOR(instruction, val)
-void FOR(const std::vector<std::string>& instructions, int repeats, int nestingLevel = 0) {
+void FOR(const std::vector<std::string>& instructions, int repeats, int nestingLevel, PCB* current_process) {
     if (nestingLevel >= 3) {
         std::lock_guard<std::mutex> lock(outputMutex);
         std::cout << "Maximum nesting level (3) reached. Skipping nested FOR loop." << std::endl;
@@ -327,13 +331,13 @@ void FOR(const std::vector<std::string>& instructions, int repeats, int nestingL
     if (repeats > 100) repeats = 100; 
     
     for (int i = 0; i < repeats; ++i) {
-        executeInstructionSet(instructions, nestingLevel + 1);
+        executeInstructionSet(instructions, nestingLevel + 1, current_process);
         
         if (g_exit_flag) break;
     }
 }
 
-void executeInstructionSet(const std::vector<std::string>& instructions, int nestingLevel) {
+void executeInstructionSet(const std::vector<std::string>& instructions, int nestingLevel, PCB* current_process) {
     for (const std::string& instruction : instructions) {
         if (g_exit_flag) break; 
         
@@ -375,7 +379,7 @@ void executeInstructionSet(const std::vector<std::string>& instructions, int nes
                     msg = msg.substr(1, msg.length() - 2);
                 }
             }
-            PRINT(msg);
+            PRINT(msg, current_process);
         }
         else if (command == "SLEEP") {
             std::string ticksStr;
@@ -420,18 +424,24 @@ void executeInstructionSet(const std::vector<std::string>& instructions, int nes
                     }
                 }
                 
-                FOR(forInstructions, repeats, nestingLevel);
+                FOR(forInstructions, repeats, nestingLevel, current_process);
             }
         }
     }
 }
 
-std::vector<std::string> generateRandomInstructions(const std::string& processName, int count) {
+std::vector<std::string> generateRandomInstructions(const std::string& processName, int count, bool enable_sleep, bool enable_for) {
     std::vector<std::string> instructions;
-    std::uniform_int_distribution<int> instrType(0, 4); // 5 types of instructions (removed one PRINT variant)
-    
+
+    // Build list of possible instruction types
+    std::vector<int> possibleInstructions = {0, 1, 2, 3, 4}; // 0: DECLARE, 1: ADD, 2: SUBTRACT, 3: PRINT var, 4: PRINT default
+    if (enable_sleep) possibleInstructions.push_back(5);     // 5: SLEEP
+    if (enable_for) possibleInstructions.push_back(6);       // 6: FOR
+
+    std::uniform_int_distribution<int> instrType(0, possibleInstructions.size() - 1);
+
     for (int i = 0; i < count; ++i) {
-        switch (instrType(gen)) {
+        switch (possibleInstructions[instrType(gen)]) {
             case 0: // DECLARE
                 instructions.push_back("DECLARE " + randomVariable() + " " + randomUint16Value());
                 break;
@@ -441,7 +451,7 @@ std::vector<std::string> generateRandomInstructions(const std::string& processNa
             case 2: // SUBTRACT
                 instructions.push_back("SUBTRACT " + randomVariable() + " " + randomVarOrValue() + " " + randomVarOrValue());
                 break;
-            case 3: // PRINT with variable - proper format
+            case 3: // PRINT with variable
                 {
                     std::string var = randomVariable();
                     instructions.push_back("PRINT \"Value of " + var + " is " + var + "\"");
@@ -450,11 +460,18 @@ std::vector<std::string> generateRandomInstructions(const std::string& processNa
             case 4: // PRINT default message
                 instructions.push_back("PRINT \"Hello world from " + processName + "!\"");
                 break;
+            case 5: // SLEEP
+                instructions.push_back("SLEEP " + std::to_string(rand() % 1000)); // random sleep ms
+                break;
+            case 6: // FOR loop placeholder
+                instructions.push_back("FOR " + std::to_string(rand() % 5 + 1)); // random repeat count 1-5
+                break;
         }
     }
-    
+
     return instructions;
 }
+
 
 //print current values of var1, var2, var3
 void printVarValues() {
@@ -476,12 +493,14 @@ void fcfs_worker_thread(int core_id) {
         }
 
         if (current_process != nullptr) {
-            //initializeLogs(current_process);
-            
-            while (current_process->instructions_executed < current_process->instructions_total) {
-                if (g_exit_flag) break;
-                
-                //ticks
+            // Initialize process-specific variables (thread-local)
+            variables.clear();
+            variables["var1"] = 0;
+            variables["var2"] = 0;
+            variables["var3"] = 0;
+
+            while (current_process->instructions_executed < current_process->instructions_total && !g_exit_flag) {
+                // Wait for CPU ticks instead of sleep
                 for (int tick_count = 0; tick_count < config_delay_per_exec; ++tick_count) {
                     if (g_exit_flag) break;
 
@@ -492,13 +511,16 @@ void fcfs_worker_thread(int core_id) {
                     });
                 }
                 if (g_exit_flag) break;
-                
-                
-                //stringstream msg;
-                //msg << "Executing instruction for " << current_process->name << "! (" 
-                //    << (current_process->instructions_executed.load() + 1) << "/" 
-                //    << current_process->instructions_total << ")";
-                //exportLogs(current_process, core_id, msg.str());
+
+                // Generate and execute one random instruction
+                std::vector<std::string> singleInstruction = generateRandomInstructions(
+                    current_process->name, 1, enable_sleep, enable_for);
+                try {
+                    executeInstructionSet(singleInstruction, 0, current_process);
+                } catch (const std::exception& e) {
+                    std::lock_guard<std::mutex> lock(outputMutex);
+                    std::cerr << "Error executing instruction in process " << current_process->name << ": " << e.what() << std::endl;
+                }
 
                 current_process->instructions_executed++;
             }
@@ -515,6 +537,7 @@ void fcfs_worker_thread(int core_id) {
     }
 }
 
+
 // Round Robin
 void rr_worker_thread(int core_id) {
     while (!g_exit_flag) {
@@ -527,17 +550,21 @@ void rr_worker_thread(int core_id) {
         }
 
         if (current_process != nullptr) {
-            // Initialize quantum if this is a new process assignment
+            // Initialize quantum if new process assignment
             if (current_process->remaining_quantum <= 0) {
                 current_process->remaining_quantum = config_quantum_cycles;
+                // Initialize process-specific variables (thread-local)
+                variables.clear();
+                variables["var1"] = 0;
+                variables["var2"] = 0;
+                variables["var3"] = 0;
             }
 
-            // Execute one instruction
-            if (current_process->instructions_executed < current_process->instructions_total) {
-                // === MODIFIED: Wait for CPU ticks instead of simple sleep ===
+            if (current_process->instructions_executed < current_process->instructions_total && !g_exit_flag) {
+                // Wait for CPU ticks instead of sleep
                 for (int tick_count = 0; tick_count < config_delay_per_exec; ++tick_count) {
                     if (g_exit_flag) break;
-                    
+
                     unsigned long long last_known_tick = g_cpu_ticks.load();
                     unique_lock<mutex> lock(g_tick_mutex);
                     g_tick_cv.wait(lock, [&]{
@@ -545,7 +572,16 @@ void rr_worker_thread(int core_id) {
                     });
                 }
                 if (g_exit_flag) break;
-                // === END MODIFICATION ===
+
+                // Generate and execute one random instruction
+                std::vector<std::string> singleInstruction = generateRandomInstructions(
+                    current_process->name, 1, enable_sleep, enable_for);
+                try {
+                    executeInstructionSet(singleInstruction, 0, current_process);
+                } catch (const std::exception& e) {
+                    std::lock_guard<std::mutex> lock(outputMutex);
+                    std::cerr << "Error executing instruction in process " << current_process->name << ": " << e.what() << std::endl;
+                }
 
                 current_process->instructions_executed++;
                 current_process->remaining_quantum--;
@@ -557,18 +593,16 @@ void rr_worker_thread(int core_id) {
 
             if (process_finished || quantum_expired) {
                 lock_guard<mutex> lock(g_process_lists_mutex);
-                
+
                 if (process_finished) {
-                    // Process completed
                     current_process->state = FINISHED;
                     g_finished_processes.push_back(current_process);
                     g_running_processes[core_id] = nullptr;
                 } else if (quantum_expired) {
-                    // Quantum expired, preempt the process
                     current_process->state = READY;
-                    current_process->remaining_quantum = 0; // Reset quantum
+                    current_process->remaining_quantum = 0;
                     g_running_processes[core_id] = nullptr;
-                    
+
                     // Add back to ready queue
                     {
                         lock_guard<mutex> ready_lock(g_ready_queue_mutex);
@@ -577,7 +611,6 @@ void rr_worker_thread(int core_id) {
                 }
             }
         } else {
-            // No process assigned to this core, sleep briefly
             this_thread::sleep_for(chrono::milliseconds(10));
         }
     }
@@ -781,22 +814,6 @@ void createTestProcesses(const string& screenName) {
 
         g_ready_queue.push(g_process_storage.back().get());
     }
-}
-//randomly generate list of instructions for a PROCESS
-// 1: DECLARE, 2: PRINT, 3: ADD, 4: SUBTRACT, 5: SLEEP, 6: FOR
-// If bool SLEEP = false, NO 5. If bool FOR = false, NO 6
-vector<int> generateInstructionList() {
-    vector<int> possibleInstructions = {1, 2, 3, 4}; // 1: DECLARE, 2: PRINT, 3: ADD, 4: SUBTRACT
-    if (enable_sleep) possibleInstructions.push_back(5);    // 5: SLEEP
-    if (enable_for) possibleInstructions.push_back(6);      // 6: FOR
-
-    int listLength = rand() % (config_max_ins - config_min_ins + 1) + config_min_ins;
-    vector<int> instructionList;
-    for (int i = 0; i < listLength; ++i) {
-        int idx = rand() % possibleInstructions.size();
-        instructionList.push_back(possibleInstructions[idx]);
-    }
-    return instructionList;
 }
 
 //
