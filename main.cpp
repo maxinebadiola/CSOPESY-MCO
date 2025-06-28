@@ -41,11 +41,13 @@ struct PCB {
     int core_id; 
     int remaining_quantum;
 
+    vector<string> logs; 
+
     PCB(int p_id, const string& p_name, ProcessState p_state, time_t p_creation_time, 
         int p_instr_total, int p_instr_exec, const string& p_filename, int p_core_id)
       : id(p_id), name(p_name), state(p_state), creation_time(p_creation_time),
         instructions_total(p_instr_total), instructions_executed(p_instr_exec), 
-        output_filename(p_filename), core_id(p_core_id), remaining_quantum(0) {}
+        output_filename(p_filename), core_id(p_core_id), remaining_quantum(0), logs() {}
 };
 
 queue<PCB*> g_ready_queue;
@@ -914,16 +916,13 @@ void screenSession(Console& screen) {
                     cout << "Status: Finished!" << endl;
                 }
 
-                ifstream inFile(currentProcess->output_filename);
-                if (inFile.is_open()) {
-                    string line;
-                    cout << "\n==== LOGS ====" << endl;
-                    while (getline(inFile, line)) {
-                        cout << line << endl;
+                cout << "\n==== LOGS ====" << endl;
+                if (!currentProcess->logs.empty()) {
+                    for (const auto& log : currentProcess->logs) {
+                        cout << log << endl;
                     }
-                    inFile.close();
                 } else {
-                    cout << "No logs available yet." << endl;
+                    cout << "No PRINT logs recorded yet." << endl;
                 }
             } else {
                 cout << "No process found associated with this screen." << endl;
