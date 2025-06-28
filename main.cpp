@@ -4,6 +4,7 @@
 #include <queue>
 #include <thread>
 #include <mutex>
+#include <condition_variable> // Added missing header
 #include <chrono>
 #include <atomic>
 #include <fstream>
@@ -60,6 +61,12 @@ vector<unique_ptr<PCB>> g_process_storage;
 thread g_scheduler_thread;
 vector<thread> g_worker_threads;
 atomic<bool> g_threads_started(false);
+
+const int TICK_DURATION_MS = 10; // Duration of one CPU tick in milliseconds
+atomic<unsigned long long> g_cpu_ticks(0);
+mutex g_tick_mutex;
+condition_variable g_tick_cv;
+thread g_tick_thread;
 
 class Console; //forward declaration for W6 variables [DO NOT REMOVE]
 
@@ -177,6 +184,23 @@ string format_timestamp_for_display(time_t t) {
 //     }
 // }
 
+void tick_generator_thread() {
+    while (!g_exit_flag) {
+        // Sleep for the configured duration of one tick
+        this_thread::sleep_for(chrono::milliseconds(TICK_DURATION_MS));
+        
+        // Lock, increment the global tick counter
+        {
+            lock_guard<mutex> lock(g_tick_mutex);
+            g_cpu_ticks++;
+        }
+        
+        // Notify all waiting worker threads that a new tick has occurred
+        g_tick_cv.notify_all();
+    }
+}
+
+
 // FCFS
 void fcfs_worker_thread(int core_id) {
     while (!g_exit_flag) {
@@ -194,8 +218,18 @@ void fcfs_worker_thread(int core_id) {
             while (current_process->instructions_executed < current_process->instructions_total) {
                 if (g_exit_flag) break;
                 
-                // Use delay from config file
-                this_thread::sleep_for(chrono::milliseconds(config_delay_per_exec));
+                //ticks
+                for (int tick_count = 0; tick_count < config_delay_per_exec; ++tick_count) {
+                    if (g_exit_flag) break;
+
+                    unsigned long long last_known_tick = g_cpu_ticks.load();
+                    unique_lock<mutex> lock(g_tick_mutex);
+                    g_tick_cv.wait(lock, [&]{
+                        return g_cpu_ticks.load() > last_known_tick || g_exit_flag.load();
+                    });
+                }
+                if (g_exit_flag) break;
+                
                 
                 //stringstream msg;
                 //msg << "Executing instruction for " << current_process->name << "! (" 
@@ -237,7 +271,19 @@ void rr_worker_thread(int core_id) {
 
             // Execute one instruction
             if (current_process->instructions_executed < current_process->instructions_total) {
-                this_thread::sleep_for(chrono::milliseconds(config_delay_per_exec));
+                // === MODIFIED: Wait for CPU ticks instead of simple sleep ===
+                for (int tick_count = 0; tick_count < config_delay_per_exec; ++tick_count) {
+                    if (g_exit_flag) break;
+                    
+                    unsigned long long last_known_tick = g_cpu_ticks.load();
+                    unique_lock<mutex> lock(g_tick_mutex);
+                    g_tick_cv.wait(lock, [&]{
+                        return g_cpu_ticks.load() > last_known_tick || g_exit_flag.load();
+                    });
+                }
+                if (g_exit_flag) break;
+                // === END MODIFICATION ===
+
                 current_process->instructions_executed++;
                 current_process->remaining_quantum--;
             }
@@ -276,6 +322,13 @@ void rr_worker_thread(int core_id) {
 
 void stopAndResetScheduler() {
     g_exit_flag = true;
+
+    g_tick_cv.notify_all();
+
+    if (g_tick_thread.joinable()) {
+        g_tick_thread.join();
+    }
+
     if (g_scheduler_thread.joinable()) {
         g_scheduler_thread.join();
     }
@@ -393,6 +446,7 @@ string getSystemReport() {
     double cpu_utilization = (static_cast<double>(used_cores) / config_num_cpu) * 100.0;
     ss << fixed << setprecision(1); // show one decimal place
     ss << "CPU Utilization: " << cpu_utilization << "%\n";
+    ss << "Current CPU Tick: " << g_cpu_ticks.load() << "\n"; 
     ss << "Cores Used: " << used_cores << endl;
     ss << "Cores available: " << (config_num_cpu - used_cores) << endl;
     ss << "Scheduler: " << (current_scheduler_type == FCFS ? "First-Come-First-Served (FCFS)" : "Round Robin (RR)");
@@ -495,6 +549,7 @@ void screenSession(Console& screen) {
             if (!g_threads_started) {
                 cout << "Starting " << config_scheduler << " scheduler with " << config_num_cpu << " CPU cores..." << endl;
                 
+                g_tick_thread = thread(tick_generator_thread);//CPU itegration
                 g_scheduler_thread = thread(schedulerThread);
                 
                 for (int i = 0; i < config_num_cpu; ++i) {
@@ -669,7 +724,10 @@ void menuSession() {
                 screenSession(screens[name]);
                 clearScreen();
                 printMenuCommands();
-            }
+            } 
+        } else if (command == "screen -ls") {
+            string report = getSystemReport();
+            cout << report;
         } else {
             cout << "Unrecognized command. Please try again." << endl;
         }
@@ -719,6 +777,7 @@ void readConfigFile() {
 }
 
 //FOR TESTING
+// === MODIFIED ===
 void printConfigVars() {
     cout << "\n[CONFIG VALUES LOADED]" << endl;
     cout << "num-cpu: " << config_num_cpu << endl;
@@ -727,8 +786,10 @@ void printConfigVars() {
     cout << "batch-process-freq: " << config_batch_process_freq << endl;
     cout << "min-ins: " << config_min_ins << endl;
     cout << "max-ins: " << config_max_ins << endl;
-    cout << "delay-per-exec: " << config_delay_per_exec << endl;
+    cout << "delay-per-exec: " << config_delay_per_exec << " ticks" << endl;
+    cout << "[System Info] Tick Duration: " << TICK_DURATION_MS << " ms" << endl;
 }
+// === END MODIFIED ===
 
 //BASIC PROGRAM INSTRUCTIONS
 //change variable value 
