@@ -120,25 +120,24 @@ void printInitial()
 }
 
 void printMenuCommands() {
-   cout << "==== MAIN MENU ====" << endl;
-   cout << "Available Commands:" << endl;
-   cout << "1. screen -s <name>" << endl;
-   cout << "2. screen -r <name>" << endl;
-   cout << "3. screen -ls" << endl; //cpu utilization report, list of processes
-   cout << "4. clear / cls" << endl;
-   cout << "5. exit" << endl;
+    cout << "==== MAIN MENU ====" << endl;
+    cout << "Available Commands:" << endl;
+    cout << "1. screen -s <name>" << endl;
+    cout << "2. screen -r <name>" << endl;
+    cout << "3. screen -ls" << endl; //cpu utilization report, list of processes
+    cout << "4. report-util" << endl; //same as screen -ls but exports to csopesy-log.txt
+    cout << "5. clear / cls" << endl;
+    cout << "6. exit" << endl;
 }
 
 void printScreenCommands() {
-cout << "==== SCREEN COMMANDS ====" << endl;
-cout << "1. scheduler-start" << endl; //continously generate basic process instructions
-cout << "2. scheduler-stop" << endl; //stops generating processes
-cout << "3. screen -ls" << endl; //cpu utilization report, list of processes
-cout << "4. report-util" << endl; //same as screen -ls but exports to csopesy-log.txt
-cout << "5. process-smi" << endl; //simple information about the process
-cout << "6. screen" << endl; //not really needed for MO1 tbh
-cout << "7. clear / cls" << endl; 
-cout << "8. exit" << endl;
+    cout << "==== SCREEN COMMANDS ====" << endl;
+    cout << "1. scheduler-start" << endl; //continously generate basic process instructions
+    cout << "2. scheduler-stop" << endl; //stops generating processes
+    cout << "3. process-smi" << endl; //simple information about the process
+    cout << "4. screen" << endl; //not really needed for MO1 tbh
+    cout << "5. clear / cls" << endl; 
+    cout << "6. exit" << endl;
 }
 
 string getCurrentTimestampWithMillis() {
@@ -865,32 +864,35 @@ void screenSession(Console& screen) {
             cout << "Stopping and resetting the scheduler..." << endl;
             stopAndResetScheduler(); // Our new clean-and-reset function
             screen.currentLine++;
-        } else if (screenCmd == "report-util") {
-            screen.currentLine++;
+        } 
+        // else if (screenCmd == "report-util") {
+        //     screen.currentLine++;
 
-            string report = getSystemReport();
+        //     string report = getSystemReport();
 
-            // Print to console
-            cout << report;
+        //     // Print to console
+        //     cout << report;
 
-            // Export to file
-            ofstream outFile("csopesy-log.txt", ios::app); // append mode
-            if (outFile.is_open()) {
-                outFile << "=== SYSTEM REPORT SAVED AT " << getCurrentTimestampWithMillis() << " ===\n";
-                outFile << report << endl;
-                outFile.close();
-                cout << "Report saved to csopesy-log.txt" << endl;
-            } else {
-                cout << "Failed to save report to file." << endl;
-            }
-        } else if (screenCmd == "screen") {
+        //     // Export to file
+        //     ofstream outFile("csopesy-log.txt", ios::app); // append mode
+        //     if (outFile.is_open()) {
+        //         outFile << "=== SYSTEM REPORT SAVED AT " << getCurrentTimestampWithMillis() << " ===\n";
+        //         outFile << report << endl;
+        //         outFile.close();
+        //         cout << "Report saved to csopesy-log.txt" << endl;
+        //     } else {
+        //         cout << "Failed to save report to file." << endl;
+        //     }
+        // } 
+        else if (screenCmd == "screen") {
             screen.currentLine++;
             screen.displayInfo();
-        } else if (screenCmd == "screen -ls") {
-            screen.currentLine++;
-            string report = getSystemReport();
-            cout << report;
-        }
+        } 
+        //else if (screenCmd == "screen -ls") {
+        //     screen.currentLine++;
+        //     string report = getSystemReport();
+        //     cout << report;
+        // }
         else if (screenCmd == "process-smi") {
             screen.currentLine++;
 
@@ -1030,7 +1032,25 @@ void menuSession() {
         } else if (command == "screen -ls") {
             string report = getSystemReport();
             cout << report;
-        } else {
+        } else if (command == "report-util") {
+            string report = getSystemReport();
+
+            // Print to console
+            cout << report;
+
+            // Export to file
+            ofstream outFile("csopesy-log.txt", ios::app); // append mode
+            if (outFile.is_open()) {
+                outFile << "=== SYSTEM REPORT SAVED AT " << getCurrentTimestampWithMillis() << " ===\n";
+                outFile << report << endl;
+                outFile.close();
+                cout << "Report saved to csopesy-log.txt" << endl;
+            } 
+            else {
+                cout << "Failed to save report to file." << endl;
+            }
+        }
+        else {
             cout << "Unrecognized command. Please try again." << endl;
         }
     }
