@@ -113,6 +113,8 @@ void printInitial()
 {
    cout << "1. initialize" << endl;
    cout << "2. exit" << endl;
+   cout << "3. enable SLEEP" << endl;
+   cout << "4. enable FOR" << endl;
 }
 
 void printMenuCommands() {
@@ -961,7 +963,16 @@ void menuSession() {
             } else if (command == "exit") {
                 cout << "Exiting program..." << endl;
                 break;
-            } else {
+            }  else if (command == "enable SLEEP") {
+                SLEEP = true;
+                cout << "SLEEP enabled." << endl;
+                continue;
+            } else if (command == "enable FOR") {
+                FOR = true;
+                cout << "FOR enabled." << endl;
+                continue;
+            }
+            else {
                 cout << "Please type 'initialize' to start or 'exit' to quit." << endl;
                 continue;
             }
