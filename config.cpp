@@ -1,13 +1,17 @@
+// config.cpp
+
 #include "headers.h"
 
-// Config variables definitions
 int config_num_cpu;
 string config_scheduler;
 int config_quantum_cycles;
 int config_batch_process_freq;
 int config_min_ins;
 int config_max_ins;
-int config_delay_per_exec;
+int config_delay_per_exec = 4;  // Default to 4 ticks per instruction
+int g_max_overall_mem;
+int g_mem_per_frame;
+int g_mem_per_proc;
 SchedulerType current_scheduler_type;
 
 void readConfigFile() {
@@ -19,19 +23,16 @@ void readConfigFile() {
         } else if (key == "scheduler") {
             string sched;
             configFile >> sched;
-            
             if (sched.front() == '"' && sched.back() == '"') {
                 sched = sched.substr(1, sched.length() - 2);
             }
-            
             config_scheduler = sched;
-            
             if (sched == "fcfs" || sched == "FCFS") {
                 current_scheduler_type = FCFS;
             } else if (sched == "rr" || sched == "RR") {
                 current_scheduler_type = RR;
             } else {
-                current_scheduler_type = FCFS; // default to FCFS
+                current_scheduler_type = FCFS;
                 cout << "Warning: Unknown scheduler type '" << sched << "', defaulting to FCFS" << endl;
             }
         } else if (key == "quantum-cycles") {
@@ -44,11 +45,18 @@ void readConfigFile() {
             configFile >> config_max_ins;
         } else if (key == "delay-per-exec") {
             configFile >> config_delay_per_exec;
+        } else if (key == "max-overall-mem") {
+            configFile >> g_max_overall_mem;
+        } else if (key == "mem-per-frame") {
+            configFile >> g_mem_per_frame;
+        } else if (key == "mem-per-proc") {
+            configFile >> g_mem_per_proc;
         } else {
             string skip;
             configFile >> skip;
         }
     }
+    initializeMemory();
     configFile.close();
 }
 

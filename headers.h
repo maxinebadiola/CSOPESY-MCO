@@ -45,12 +45,14 @@ struct PCB {
     int core_id; 
     int remaining_quantum;
     vector<string> logs; 
+    atomic<bool> is_allocated{false};
+    int memory_requirement;
 
     PCB(int p_id, const string& p_name, ProcessState p_state, time_t p_creation_time, 
-        int p_instr_total, int p_instr_exec, const string& p_filename, int p_core_id)
+        int p_instr_total, int p_instr_exec, const string& p_filename, int p_core_id, int p_mem_req)
       : id(p_id), name(p_name), state(p_state), creation_time(p_creation_time),
         instructions_total(p_instr_total), instructions_executed(p_instr_exec), 
-        output_filename(p_filename), core_id(p_core_id), remaining_quantum(0), logs() {}
+        output_filename(p_filename), core_id(p_core_id), remaining_quantum(0), logs(), memory_requirement(p_mem_req) {}
 };
 
 // Forward declarations
@@ -109,6 +111,27 @@ extern int config_min_ins;
 extern int config_max_ins;
 extern int config_delay_per_exec;
 extern SchedulerType current_scheduler_type;
+
+// memory management
+struct MemoryBlock {
+    int start_address;
+    int size;
+    bool is_free;
+    string process_name;
+};
+
+extern vector<MemoryBlock> g_memory_blocks;
+extern mutex g_memory_mutex;
+extern int g_max_overall_mem;
+extern int g_mem_per_frame;
+extern int g_mem_per_proc;
+
+void initializeMemory();
+bool allocateMemoryFirstFit(PCB* process);
+void deallocateMemory(PCB* process);
+void printMemorySnapshot(const string& filename);
+
+void printMemoryState(const char* context);
 
 // Instruction execution
 void DECLARE(const string& var, uint16_t value);

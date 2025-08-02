@@ -36,9 +36,10 @@ void printScreenCommands() {
     cout << "1. scheduler-start" << endl;
     cout << "2. scheduler-stop" << endl;
     cout << "3. process-smi" << endl;
-    cout << "4. screen" << endl;
-    cout << "5. clear / cls" << endl; 
-    cout << "6. exit" << endl;
+    cout << "4. screen -ls" << endl;
+    cout << "5. screen" << endl;
+    cout << "6. clear / cls" << endl; 
+    cout << "7. exit" << endl;
 }
 
 Console::Console(const string& name, int total) {
@@ -175,7 +176,10 @@ void screenSession(Console& screen) {
                 cout << "No process found associated with this screen." << endl;
             }
         }
-        else {
+        else if (screenCmd == "screen -ls") {
+            string report = getSystemReport();
+            cout << report;
+        } else {
             cout << "Unrecognized command. Please try again." << endl;
             screen.currentLine++;
         }

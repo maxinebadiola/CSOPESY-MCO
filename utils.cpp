@@ -7,16 +7,21 @@ string getCurrentTimestampWithMillis() {
     auto epoch = now_ms.time_since_epoch();
     auto value = chrono::duration_cast<chrono::milliseconds>(epoch);
     time_t now_c = chrono::system_clock::to_time_t(now);
+    
     tm localTime;
-#ifdef _WIN64
+    #ifdef _WIN64
     localtime_s(&localTime, &now_c);
-#else
+    #else
     localtime_r(&now_c, &localTime);
-#endif
+    #endif
+    
+    char buffer[80];
+    strftime(buffer, sizeof(buffer), "%m/%d/%Y %I:%M:%S", &localTime);
+    
     stringstream ss;
-    ss << put_time(&localTime, "(%m/%d/%Y | %I:%M:%S");
-    ss << '.' << setfill('0') << setw(3) << value.count() % 1000;
-    ss << (localTime.tm_hour >= 12 ? " PM)" : " AM)");
+    ss << buffer << "." << setfill('0') << setw(3) << value.count() % 1000;
+    ss << (localTime.tm_hour >= 12 ? "PM" : "AM");
+    
     return ss.str();
 }
 
