@@ -23,7 +23,7 @@ void printInitial() {
 void printMenuCommands() {
     cout << "==== MAIN MENU ====" << endl;
     cout << "Available Commands:" << endl;
-    cout << "1. screen -s <name>" << endl;
+    cout << "1. screen -s <name> <process_memory_size>" << endl;
     cout << "2. screen -r <name>" << endl;
     cout << "3. screen -ls" << endl;
     cout << "4. report-util" << endl;
@@ -234,16 +234,21 @@ void menuSession() {
             printMenuCommands();
             continue;
         } else if (command.find("screen -s ") == 0) {
-            string name = command.substr(10);
-            if (name.empty()) {
-                cout << "Please provide a name for the screen session." << endl;
+            // Parse: screen -s <process_name> <process_memory_size>
+            istringstream iss(command.substr(10));
+            string name;
+            int memSize = 0;
+            iss >> name >> memSize;
+
+            if (name.empty() || memSize <= 0) {
+                cout << "Usage: screen -s <process_name> <process_memory_size>" << endl;
             } else if (screens.find(name) != screens.end()) {
                 cout << "Screen session already exists: " << name << endl;
                 cout << "Created At: " << screens[name].timestamp << endl;
             } else {
-                Console newScreen(name, 100);
+                Console newScreen(name, memSize);
                 screens[name] = newScreen;
-                cout << "New screen session created: " << name << endl;
+                cout << "New screen session created: " << name << " with memory size: " << memSize << endl;
                 screenSession(screens[name]);
                 clearScreen();
                 printMenuCommands();
