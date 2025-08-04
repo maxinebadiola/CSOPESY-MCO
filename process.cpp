@@ -159,20 +159,6 @@ void fcfs_worker_thread(int core_id) {
 }
 
 void rr_worker_thread(int core_id) {
-    //Static one-time directory creation (DISABLED)
-    static std::once_flag dir_created;
-    std::call_once(dir_created, [](){
-        const string snapshot_dir = "memory_snapshots";
-        try {
-            if (!fs::exists(snapshot_dir)) {
-                fs::create_directory(snapshot_dir);
-            }
-        } catch (const fs::filesystem_error& e) {
-            cerr << "FATAL: Directory creation failed - " << e.what() << endl;
-            exit(1);
-        }
-    });
-
     // Thread-local counter for sequential filenames
     static thread_local int thread_file_counter = 0;
     
@@ -194,18 +180,6 @@ void rr_worker_thread(int core_id) {
             if (current_process->remaining_quantum <= 0) {
                 // Reset quantum
                 current_process->remaining_quantum = config_quantum_cycles;
-                
-                // Generate unique filename
-                string filename = "memory_snapshots/memory_stamp_" + 
-                                to_string(core_id) + "_" +
-                                to_string(thread_file_counter++) + ".txt";
-                
-                //Take memory snapshot (with thread-safe file access)
-                {
-                    lock_guard<mutex> file_lock(outputMutex);
-                    printMemorySnapshot(filename);
-                    // cerr << "Core " << core_id << ": Created " << filename << endl;
-                }
                 
                 // Reset process variables
                 variables.clear();
