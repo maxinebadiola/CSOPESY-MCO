@@ -275,7 +275,8 @@ void createTestProcesses(const string& screenName) {
     static int process_counter = 1; // Add this static counter
     
     for (int i = 0; i < config_batch_process_freq; ++i) {
-        int mem_needed = g_mem_per_proc; // 1-3 MB
+        // Calculate random memory requirement between min and max
+        int mem_needed = g_min_mem_per_proc + (rand() % (g_max_mem_per_proc - g_min_mem_per_proc + 1));
         
         string processName = "P" + to_string(process_counter++); // Use sequential counter
         string filename = "screen_" + processName + ".txt";

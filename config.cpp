@@ -11,7 +11,8 @@ int config_max_ins;
 int config_delay_per_exec = 4;  // Default to 4 ticks per instruction
 int g_max_overall_mem;
 int g_mem_per_frame;
-int g_mem_per_proc;
+int g_min_mem_per_proc;
+int g_max_mem_per_proc;
 SchedulerType current_scheduler_type;
 
 void readConfigFile() {
@@ -49,8 +50,10 @@ void readConfigFile() {
             configFile >> g_max_overall_mem;
         } else if (key == "mem-per-frame") {
             configFile >> g_mem_per_frame;
-        } else if (key == "mem-per-proc") {
-            configFile >> g_mem_per_proc;
+        } else if (key == "min-mem-per-proc") {
+            configFile >> g_min_mem_per_proc;
+        } else if (key == "max-mem-per-proc") {
+            configFile >> g_max_mem_per_proc;
         } else {
             string skip;
             configFile >> skip;
@@ -69,5 +72,10 @@ void printConfigVars() {
     cout << "min-ins: " << config_min_ins << endl;
     cout << "max-ins: " << config_max_ins << endl;
     cout << "delay-per-exec: " << config_delay_per_exec << " ticks" << endl;
+    cout << "max-overall-mem: " << g_max_overall_mem << " bytes" << endl;
+    cout << "mem-per-frame: " << g_mem_per_frame << " bytes" << endl;
+    cout << "min-mem-per-proc: " << g_min_mem_per_proc << " bytes" << endl;
+    cout << "max-mem-per-proc: " << g_max_mem_per_proc << " bytes" << endl;
+    cout << "total-frames: " << (g_max_overall_mem / g_mem_per_frame) << endl;
     cout << "[System Info] Tick Duration: " << TICK_DURATION_MS << " ms" << endl;
 }

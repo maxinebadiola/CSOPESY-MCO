@@ -17,6 +17,11 @@ void initializeMemory() {
     });
 }
 
+int calculatePagesRequired(int memorySize) {
+    // P = M / mem-per-frame (rounded up)
+    return (memorySize + g_mem_per_frame - 1) / g_mem_per_frame;
+}
+
 void printMemoryState(const char* context) {
     lock_guard<mutex> lock(g_memory_mutex);
     cerr << "\nMemory State (" << context << "):\n";
@@ -50,7 +55,7 @@ bool allocateMemoryFirstFit(PCB* process) {
 
     int required_size = process->memory_requirement > 0 ? 
                        process->memory_requirement : 
-                       g_mem_per_proc;
+                       g_min_mem_per_proc;
 
     // Check if already allocated
     for (const auto& block : g_memory_blocks) {

@@ -124,12 +124,14 @@ extern vector<MemoryBlock> g_memory_blocks;
 extern mutex g_memory_mutex;
 extern int g_max_overall_mem;
 extern int g_mem_per_frame;
-extern int g_mem_per_proc;
+extern int g_min_mem_per_proc;
+extern int g_max_mem_per_proc;
 
 void initializeMemory();
 bool allocateMemoryFirstFit(PCB* process);
 void deallocateMemory(PCB* process);
 void printMemorySnapshot(const string& filename);
+int calculatePagesRequired(int memorySize);
 
 void printMemoryState(const char* context);
 
