@@ -1,9 +1,16 @@
 // memory.cpp
 #include "headers.h"
 #include <filesystem>
+#include <sstream>
+#include <iomanip>
 
 vector<MemoryBlock> g_memory_blocks;
 mutex g_memory_mutex;
+
+// Memory space for process memory access
+vector<uint16_t> g_memory_space;
+mutex g_memory_space_mutex;
+int g_memory_space_size = 0;
 
 
 void initializeMemory() {
@@ -15,6 +22,37 @@ void initializeMemory() {
         true, 
         ""
     });
+}
+
+void initializeMemorySpace(int size) {
+    lock_guard<mutex> lock(g_memory_space_mutex);
+    g_memory_space_size = size;
+    g_memory_space.assign(size / 2, 0); // Each uint16 takes 2 bytes
+}
+
+bool isValidMemoryAddress(int address) {
+    // Check if address is within bounds and is even (uint16 aligned)
+    return address >= 0 && address < g_memory_space_size && (address % 2 == 0);
+}
+
+uint16_t readMemory(int address) {
+    lock_guard<mutex> lock(g_memory_space_mutex);
+    if (!isValidMemoryAddress(address)) {
+        return 0; //invalid/uninitialized addresses
+    }
+    int index = address / 2; //byte address to uint16 index
+    return g_memory_space[index];
+}
+
+void writeMemory(int address, uint16_t value) {
+    lock_guard<mutex> lock(g_memory_space_mutex);
+    if (!isValidMemoryAddress(address)) {
+        stringstream ss;
+        ss << "Memory access violation at address 0x" << hex << address << " - invalid address"; //for screen -r etc.
+        throw runtime_error(ss.str());
+    }
+    int index = address / 2; //byte address to uint16 index
+    g_memory_space[index] = value;
 }
 
 int calculatePagesRequired(int memorySize) {

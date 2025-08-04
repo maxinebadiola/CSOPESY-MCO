@@ -25,6 +25,23 @@ string getCurrentTimestampWithMillis() {
     return ss.str();
 }
 
+string getTimeOnlyFromTimestamp(const string& timestamp) {
+    // Extract time from timestamp (format: MM/DD/YYYY HH:MM:SS.mmmAM/PM)
+    size_t spacePos = timestamp.find(' ');
+    if (spacePos != string::npos && spacePos + 1 < timestamp.length()) {
+        string timeWithMs = timestamp.substr(spacePos + 1);
+        // Remove milliseconds if present
+        size_t dotPos = timeWithMs.find('.');
+        if (dotPos != string::npos) {
+            string timeOnly = timeWithMs.substr(0, dotPos);
+            string ampm = timeWithMs.substr(timeWithMs.length() - 2);
+            return timeOnly + ampm;
+        }
+        return timeWithMs;
+    }
+    return "unknown";
+}
+
 string format_timestamp_for_display(time_t t) {
     tm local_tm;
 #ifdef _WIN64
@@ -98,6 +115,19 @@ string getSystemReport() {
         anyFinished = true;
     }
     if (!anyFinished) ss << "No finished processes\n";
+
+    // Add cancelled processes section
+    {
+        lock_guard<mutex> lock(g_cancelled_processes_mutex);
+        if (!g_cancelled_processes.empty()) {
+            ss << "\n==== CANCELLED PROCESSES ====\n";
+            for (const auto& cp : g_cancelled_processes) {
+                ss << cp.process->name << "\t(" << cp.timestamp << ")\t"
+                   << "Finished\t"
+                   << cp.process->instructions_executed << " / " << cp.process->instructions_total << endl;
+            }
+        }
+    }
 
     return ss.str();
 }

@@ -7,6 +7,11 @@ queue<PCB*> g_ready_queue;
 mutex g_ready_queue_mutex;
 vector<PCB*> g_running_processes;
 vector<PCB*> g_finished_processes;
+
+// Cancelled processes (memory violations)
+vector<CancelledProcess> g_cancelled_processes;
+mutex g_cancelled_processes_mutex;
+
 mutex g_process_lists_mutex;
 atomic<bool> g_exit_flag(false);
 vector<unique_ptr<PCB>> g_process_storage;
@@ -56,6 +61,12 @@ void stopAndResetScheduler() {
         g_running_processes[i] = nullptr;
     }
     g_finished_processes.clear();
+    
+    {
+        lock_guard<mutex> lock(g_cancelled_processes_mutex);
+        g_cancelled_processes.clear();
+    }
+    
     g_threads_started = false;
     g_exit_flag = false;
     cout << "Scheduler and process generation stopped successfully." << endl;
@@ -120,35 +131,92 @@ void fcfs_worker_thread(int core_id) {
             }
         }
         if (current_process != nullptr) {
-            variables.clear();
-            variables["var1"] = 0;
-            variables["var2"] = 0;
-            variables["var3"] = 0;
-            while (current_process->instructions_executed < current_process->instructions_total && !g_exit_flag) {
-                for (int tick_count = 0; tick_count < config_delay_per_exec; ++tick_count) {
-                    if (g_exit_flag) break;
-                    unsigned long long last_known_tick = g_cpu_ticks.load();
-                    unique_lock<mutex> lock(g_tick_mutex);
-                    g_tick_cv.wait(lock, [&]{
-                        return g_cpu_ticks.load() > last_known_tick || g_exit_flag.load();
-                    });
-                }
-                if (g_exit_flag) break;
-                std::vector<std::string> singleInstruction = generateRandomInstructions(
-                    current_process->name, 1, enable_sleep, enable_for);
+            // Initialize process-specific symbol table
+            current_process->symbol_table.clear();
+            
+            // If process has custom instructions, execute them instead of random ones
+            if (current_process->has_custom_instructions) {
                 try {
-                    executeInstructionSet(singleInstruction, 0, current_process);
-                } catch (const std::exception& e) {
-                    std::lock_guard<std::mutex> lock(outputMutex);
-                    std::cerr << "Error executing instruction in process " << current_process->name << ": " << e.what() << std::endl;
+                    executeInstructionSet(current_process->custom_instructions, 0, current_process);
+                    current_process->instructions_executed = current_process->instructions_total;
+                } catch (const exception& e) {
+                    // Handle memory access violation by terminating the process
+                    string error_msg = e.what();
+                    bool is_memory_violation = error_msg.find("Memory access violation") != string::npos;
+                    
+                    if (is_memory_violation) {
+                        // Extract memory address from error message
+                        string mem_address = "unknown";
+                        size_t addr_pos = error_msg.find("address ");
+                        if (addr_pos != string::npos) {
+                            mem_address = error_msg.substr(addr_pos + 8);
+                            // Remove any trailing text after the address
+                            size_t space_pos = mem_address.find(' ');
+                            if (space_pos != string::npos) {
+                                mem_address = mem_address.substr(0, space_pos);
+                            }
+                        }
+                        
+                        // Add to cancelled processes list
+                        CancelledProcess cancelled;
+                        cancelled.process = current_process;
+                        cancelled.timestamp = format_timestamp_for_display(time(0));
+                        cancelled.time_only = getTimeOnlyFromTimestamp(getCurrentTimestampWithMillis());
+                        cancelled.memory_address = mem_address;
+                        
+                        // Log to memory violation file
+                        ofstream logFile("memory-violation-log.txt", ios::app);
+                        if (logFile.is_open()) {
+                            logFile << "[" << getCurrentTimestampWithMillis() << "] Process " << current_process->name 
+                                    << " terminated due to memory access violation at address " << mem_address << endl;
+                            logFile.close();
+                        }
+                        
+                        {
+                            lock_guard<mutex> lock(g_cancelled_processes_mutex);
+                            g_cancelled_processes.push_back(cancelled);
+                        }
+                    }
+                    
+                    lock_guard<mutex> lock(outputMutex);
+                    cerr << "Process " << current_process->name << " terminated due to: " << e.what() << endl;
+                    current_process->state = FINISHED;
+                    current_process->instructions_executed = current_process->instructions_total;
                 }
-                current_process->instructions_executed++;
+            } else {
+                // Original random instruction execution
+                variables.clear();
+                variables["var1"] = 0;
+                variables["var2"] = 0;
+                variables["var3"] = 0;
+                while (current_process->instructions_executed < current_process->instructions_total && !g_exit_flag) {
+                    for (int tick_count = 0; tick_count < config_delay_per_exec; ++tick_count) {
+                        if (g_exit_flag) break;
+                        unsigned long long last_known_tick = g_cpu_ticks.load();
+                        unique_lock<mutex> lock(g_tick_mutex);
+                        g_tick_cv.wait(lock, [&]{
+                            return g_cpu_ticks.load() > last_known_tick || g_exit_flag.load();
+                        });
+                    }
+                    if (g_exit_flag) break;
+                    std::vector<std::string> singleInstruction = generateRandomInstructions(
+                        current_process->name, 1, enable_sleep, enable_for);
+                    try {
+                        executeInstructionSet(singleInstruction, 0, current_process);
+                    } catch (const std::exception& e) {
+                        std::lock_guard<std::mutex> lock(outputMutex);
+                        std::cerr << "Error executing instruction in process " << current_process->name << ": " << e.what() << std::endl;
+                    }
+                    current_process->instructions_executed++;
+                }
             }
+            
             if (!g_exit_flag) {
                 lock_guard<mutex> lock(g_process_lists_mutex);
                 current_process->state = FINISHED;
                 g_finished_processes.push_back(current_process);
                 g_running_processes[core_id] = nullptr;
+                deallocateMemory(current_process);
             }
         } else {
             this_thread::sleep_for(chrono::milliseconds(100));
@@ -205,11 +273,15 @@ void rr_worker_thread(int core_id) {
                     // cerr << "Core " << core_id << ": Created " << filename << endl;
                 }
                 
-                // Reset process variables
-                variables.clear();
-                variables["var1"] = 0;
-                variables["var2"] = 0;
-                variables["var3"] = 0;
+                // Reset process variables for both custom and random processes
+                if (current_process->has_custom_instructions) {
+                    current_process->symbol_table.clear();
+                } else {
+                    variables.clear();
+                    variables["var1"] = 0;
+                    variables["var2"] = 0;
+                    variables["var3"] = 0;
+                }
             }
 
             // 2. Execute process instructions
@@ -226,13 +298,63 @@ void rr_worker_thread(int core_id) {
                 
                 if (!g_exit_flag.load()) {
                     try {
-                        auto instruction = generateRandomInstructions(
-                            current_process->name, 1, enable_sleep, enable_for);
-                        executeInstructionSet(instruction, 0, current_process);
+                        if (current_process->has_custom_instructions) {
+                            // Execute custom instructions one by one
+                            if (current_process->instructions_executed < current_process->custom_instructions.size()) {
+                                vector<string> single_instruction = {
+                                    current_process->custom_instructions[current_process->instructions_executed]
+                                };
+                                executeInstructionSet(single_instruction, 0, current_process);
+                            }
+                        } else {
+                            // Execute random instructions
+                            auto instruction = generateRandomInstructions(
+                                current_process->name, 1, enable_sleep, enable_for);
+                            executeInstructionSet(instruction, 0, current_process);
+                        }
                     } catch (const exception& e) {
+                        string error_msg = e.what();
+                        bool is_memory_violation = error_msg.find("Memory access violation") != string::npos;
+                        
+                        if (is_memory_violation) {
+                            // Extract memory address from error message
+                            string mem_address = "unknown";
+                            size_t addr_pos = error_msg.find("address ");
+                            if (addr_pos != string::npos) {
+                                mem_address = error_msg.substr(addr_pos + 8);
+                                // Remove any trailing text after the address
+                                size_t space_pos = mem_address.find(' ');
+                                if (space_pos != string::npos) {
+                                    mem_address = mem_address.substr(0, space_pos);
+                                }
+                            }
+                            
+                            // Add to cancelled processes list
+                            CancelledProcess cancelled;
+                            cancelled.process = current_process;
+                            cancelled.timestamp = format_timestamp_for_display(time(0));
+                            cancelled.time_only = getTimeOnlyFromTimestamp(getCurrentTimestampWithMillis());
+                            cancelled.memory_address = mem_address;
+                            
+                            // Log to memory violation file
+                            ofstream logFile("memory-violation-log.txt", ios::app);
+                            if (logFile.is_open()) {
+                                logFile << "[" << getCurrentTimestampWithMillis() << "] Process " << current_process->name 
+                                        << " terminated due to memory access violation at address " << mem_address << endl;
+                                logFile.close();
+                            }
+                            
+                            {
+                                lock_guard<mutex> lock(g_cancelled_processes_mutex);
+                                g_cancelled_processes.push_back(cancelled);
+                            }
+                        }
+                        
                         lock_guard<mutex> lock(outputMutex);
-                        cerr << "Core " << core_id << ": Error in " 
-                             << current_process->name << " - " << e.what() << endl;
+                        cerr << "Core " << core_id << ": Process " << current_process->name 
+                             << " terminated due to: " << e.what() << endl;
+                        current_process->state = FINISHED;
+                        current_process->instructions_executed = current_process->instructions_total;
                     }
                     current_process->instructions_executed++;
                 }

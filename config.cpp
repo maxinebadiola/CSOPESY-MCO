@@ -60,6 +60,7 @@ void readConfigFile() {
         }
     }
     initializeMemory();
+    initializeMemorySpace(g_max_overall_mem); //use config value
     configFile.close();
 }
 

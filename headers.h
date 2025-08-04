@@ -47,6 +47,9 @@ struct PCB {
     vector<string> logs; 
     atomic<bool> is_allocated{false};
     int memory_requirement;
+    unordered_map<string, uint16_t> symbol_table; // process-specific variables (max 32)
+    vector<string> custom_instructions; //screen -c
+    bool has_custom_instructions{false};
 
     PCB(int p_id, const string& p_name, ProcessState p_state, time_t p_creation_time, 
         int p_instr_total, int p_instr_exec, const string& p_filename, int p_core_id, int p_mem_req)
@@ -64,6 +67,7 @@ void printInitial();
 void printMenuCommands();
 void printScreenCommands();
 string getCurrentTimestampWithMillis();
+string getTimeOnlyFromTimestamp(const string& timestamp);
 string format_timestamp_for_display(time_t t);
 void tick_generator_thread();
 void stopAndResetScheduler();
@@ -81,6 +85,17 @@ extern queue<PCB*> g_ready_queue;
 extern mutex g_ready_queue_mutex;
 extern vector<PCB*> g_running_processes;
 extern vector<PCB*> g_finished_processes;
+
+// Cancelled process tracking (memory violations)
+struct CancelledProcess {
+    PCB* process;
+    string timestamp;
+    string time_only;  //(HH:MM:SS AM/PM)
+    string memory_address;
+};
+extern vector<CancelledProcess> g_cancelled_processes;
+extern mutex g_cancelled_processes_mutex;
+
 extern mutex g_process_lists_mutex;
 extern atomic<bool> g_exit_flag;
 extern vector<unique_ptr<PCB>> g_process_storage;
@@ -120,6 +135,11 @@ struct MemoryBlock {
     string process_name;
 };
 
+// Memory space for processes
+extern vector<uint16_t> g_memory_space;
+extern mutex g_memory_space_mutex;
+extern int g_memory_space_size;
+
 extern vector<MemoryBlock> g_memory_blocks;
 extern mutex g_memory_mutex;
 extern int g_max_overall_mem;
@@ -128,18 +148,24 @@ extern int g_min_mem_per_proc;
 extern int g_max_mem_per_proc;
 
 void initializeMemory();
+void initializeMemorySpace(int size);
 bool allocateMemoryFirstFit(PCB* process);
 void deallocateMemory(PCB* process);
 void printMemorySnapshot(const string& filename);
 int calculatePagesRequired(int memorySize);
+bool isValidMemoryAddress(int address);
+uint16_t readMemory(int address);
+void writeMemory(int address, uint16_t value);
 
 void printMemoryState(const char* context);
 
 // Instruction execution
-void DECLARE(const string& var, uint16_t value);
-uint16_t getValue(const string& varOrValue);
-void ADD(const string& var1, const string& op2, const string& op3);
-void SUBTRACT(const string& var1, const string& op2, const string& op3);
+void DECLARE(const string& var, uint16_t value, PCB* current_process = nullptr);
+uint16_t getValue(const string& varOrValue, PCB* current_process = nullptr);
+void ADD(const string& var1, const string& op2, const string& op3, PCB* current_process = nullptr);
+void SUBTRACT(const string& var1, const string& op2, const string& op3, PCB* current_process = nullptr);
+void READ(const string& var, const string& address_str, PCB* current_process);
+void WRITE(const string& address_str, const string& value_str, PCB* current_process);
 double setVariableDefault();
 string randomVariable();
 string randomUint16Value();
@@ -151,6 +177,8 @@ void FOR(const vector<string>& instructions, int repeats, int nestingLevel, PCB*
 void executeInstructionSet(const vector<string>& instructions, int nestingLevel, PCB* current_process);
 vector<string> generateRandomInstructions(const string& processName, int count, 
                                         bool enable_sleep, bool enable_for);
+vector<string> parseInstructions(const string& instructions_str);
+bool validateInstructions(const vector<string>& instructions);
 void printVarValues();
 
 // Console class
