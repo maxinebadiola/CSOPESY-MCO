@@ -257,40 +257,32 @@ void menuSession() {
         } else if (command.find("screen -r ") == 0) {
             string name = command.substr(10);
             if (name.empty()) {
-            cout << "Please provide a name to resume a screen session." << endl;
+                cout << "Please provide a name to resume a screen session." << endl;
             } else if (screens.find(name) == screens.end()) {
-            cout << "Process " << name << " not found." << endl;
+                cout << "Process " << name << " not found." << endl;
             } else {
-            // Check log.txt for memory access violation error
-            ifstream logFile("log.txt");
-            bool violationFound = false;
-            string line, violationTime, violationAddr;
-            while (getline(logFile, line)) {
-                string searchStr = "Process " + name + " memory access violation at ";
-                size_t pos = line.find(searchStr);
-                if (pos != string::npos) {
-                size_t timeStart = pos + searchStr.length();
-                size_t timeEnd = line.find(' ', timeStart);
-                violationTime = line.substr(timeStart, timeEnd - timeStart);
-                size_t addrStart = line.find("0x", timeEnd);
-                if (addrStart != string::npos) {
-                    violationAddr = line.substr(addrStart, line.length() - addrStart);
+                // Check log.txt for memory access violation error
+                ifstream logFile("log.txt");
+                bool violationFound = false;
+                string line, violationTime, violationAddr;
+                
+                while (getline(logFile, line)) {
+                    string searchStr = "process " + name + " violation error";
+                    if (line.find(searchStr) != string::npos) {
+                        violationFound = true;
+                        break;
+                    }
                 }
-                violationFound = true;
-                break;
+                logFile.close();
+                
+                if (violationFound) {
+                    cout << "Process " << name << " shut down due to memory access violation error." << endl;
+                } else {
+                    screenSession(screens[name]);
+                    clearScreen();
+                    printMenuCommands();
                 }
-            }
-            logFile.close();
-
-            if (violationFound) {
-                cout << "Process " << name << " shut down due to memory access violation error that occurred at "
-                 << violationTime << ". " << violationAddr << " invalid." << endl;
-            } else {
-                screenSession(screens[name]);
-                clearScreen();
-                printMenuCommands();
-            }
-            }
+            } 
         } else if (command == "screen -ls") {
             string report = getSystemReport();
             cout << report;
