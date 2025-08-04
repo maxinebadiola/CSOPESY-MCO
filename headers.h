@@ -130,7 +130,6 @@ extern int g_max_mem_per_proc;
 void initializeMemory();
 bool allocateMemoryFirstFit(PCB* process);
 void deallocateMemory(PCB* process);
-void printMemorySnapshot(const string& filename);
 int calculatePagesRequired(int memorySize);
 
 void printMemoryState(const char* context);
