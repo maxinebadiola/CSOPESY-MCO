@@ -1,3 +1,4 @@
 *.exe
 *.txt
 !config.txt
+.vscode
