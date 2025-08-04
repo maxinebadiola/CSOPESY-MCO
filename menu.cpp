@@ -234,13 +234,14 @@ void menuSession() {
             printMenuCommands();
             continue;
         } else if (command.find("screen -s ") == 0) {
-            // Parse: screen -s <process_name> <process_memory_size>
             istringstream iss(command.substr(10));
             string name;
             int memSize = 0;
             iss >> name >> memSize;
 
-            if (name.empty() || memSize <= 0) {
+            bool isPowerOf2 = (memSize > 0) && ((memSize & (memSize - 1)) == 0);
+            if (name.empty() || memSize < 64 || memSize > 65536 || !isPowerOf2) {
+                cout << "Invalid memory allocation. Memory must be a power of 2 between 2^6 (64) and 2^16 (65536) bytes." << endl;
                 cout << "Usage: screen -s <process_name> <process_memory_size>" << endl;
             } else if (screens.find(name) != screens.end()) {
                 cout << "Screen session already exists: " << name << endl;
@@ -256,14 +257,40 @@ void menuSession() {
         } else if (command.find("screen -r ") == 0) {
             string name = command.substr(10);
             if (name.empty()) {
-                cout << "Please provide a name to resume a screen session." << endl;
+            cout << "Please provide a name to resume a screen session." << endl;
             } else if (screens.find(name) == screens.end()) {
-                cout << "Screen session not found: " << name << endl;
+            cout << "Process " << name << " not found." << endl;
+            } else {
+            // Check log.txt for memory access violation error
+            ifstream logFile("log.txt");
+            bool violationFound = false;
+            string line, violationTime, violationAddr;
+            while (getline(logFile, line)) {
+                string searchStr = "Process " + name + " memory access violation at ";
+                size_t pos = line.find(searchStr);
+                if (pos != string::npos) {
+                size_t timeStart = pos + searchStr.length();
+                size_t timeEnd = line.find(' ', timeStart);
+                violationTime = line.substr(timeStart, timeEnd - timeStart);
+                size_t addrStart = line.find("0x", timeEnd);
+                if (addrStart != string::npos) {
+                    violationAddr = line.substr(addrStart, line.length() - addrStart);
+                }
+                violationFound = true;
+                break;
+                }
+            }
+            logFile.close();
+
+            if (violationFound) {
+                cout << "Process " << name << " shut down due to memory access violation error that occurred at "
+                 << violationTime << ". " << violationAddr << " invalid." << endl;
             } else {
                 screenSession(screens[name]);
                 clearScreen();
                 printMenuCommands();
-            } 
+            }
+            }
         } else if (command == "screen -ls") {
             string report = getSystemReport();
             cout << report;
@@ -273,7 +300,7 @@ void menuSession() {
             // Print to console
             cout << report;
 
-            // Export to file
+            // Export to file (DISABLED)
             ofstream outFile("csopesy-log.txt", ios::app);
             if (outFile.is_open()) {
                 outFile << "=== SYSTEM REPORT SAVED AT " << getCurrentTimestampWithMillis() << " ===\n";

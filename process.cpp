@@ -157,7 +157,7 @@ void fcfs_worker_thread(int core_id) {
 }
 
 void rr_worker_thread(int core_id) {
-    // Static one-time directory creation
+    //Static one-time directory creation (DISABLED)
     static std::once_flag dir_created;
     std::call_once(dir_created, [](){
         const string snapshot_dir = "memory_snapshots";
@@ -198,7 +198,7 @@ void rr_worker_thread(int core_id) {
                                 to_string(core_id) + "_" +
                                 to_string(thread_file_counter++) + ".txt";
                 
-                // Take memory snapshot (with thread-safe file access)
+                //Take memory snapshot (with thread-safe file access)
                 {
                     lock_guard<mutex> file_lock(outputMutex);
                     printMemorySnapshot(filename);
