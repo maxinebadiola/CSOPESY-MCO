@@ -36,10 +36,11 @@ void printScreenCommands() {
     cout << "1. scheduler-start" << endl;
     cout << "2. scheduler-stop" << endl;
     cout << "3. process-smi" << endl;
-    cout << "4. screen -ls" << endl;
-    cout << "5. screen" << endl;
-    cout << "6. clear / cls" << endl; 
-    cout << "7. exit" << endl;
+    cout << "4. vmstat" << endl;
+    cout << "5. screen -ls" << endl;
+    cout << "6. screen" << endl;
+    cout << "7. clear / cls" << endl; 
+    cout << "8. exit" << endl;
 }
 
 Console::Console(const string& name, int total) {
@@ -66,6 +67,42 @@ void clearScreen() {
        system("clear");
    #endif
    printHeader();
+}
+
+void printVmstat() {
+    lock_guard<mutex> lock(g_memory_mutex);
+    
+    int total_memory = g_max_overall_mem;
+    int used_memory = 0;
+    int free_memory = 0;
+    
+    for (const auto& block : g_memory_blocks) {
+        if (block.is_free) {
+            free_memory += block.size;
+        } else {
+            used_memory += block.size;
+        }
+    }
+
+    unsigned long long total_cpu_ticks = g_cpu_ticks.load(); 
+    long long idle_ticks = g_idle_cpu_ticks.load();
+    long long active_ticks = g_active_cpu_ticks.load();
+    long long total_accounted = idle_ticks + active_ticks;
+
+    long long remaining_ticks = (long long)(total_cpu_ticks * config_num_cpu) - total_accounted;
+    if (remaining_ticks > 0) {
+        idle_ticks += remaining_ticks;  
+    }
+
+    printf("\n");
+    printf("      %d K total memory\n", total_memory / 1024);
+    printf("      %d K used memory\n", used_memory / 1024);
+    printf("      %d K free memory\n", free_memory / 1024);
+    printf("      %lld idle cpu ticks\n", idle_ticks);
+    printf("      %lld active cpu ticks\n", active_ticks);
+    printf("      %lld total cpu ticks (across all cores)\n", idle_ticks + active_ticks);
+    // printf("      %lld pages paged in\n", g_pages_paged_in.load());
+    // printf("      %lld pages paged out\n", g_pages_paged_out.load());
 }
 
 void screenSession(Console& screen) {
@@ -175,6 +212,8 @@ void screenSession(Console& screen) {
             } else {
                 cout << "No process found associated with this screen." << endl;
             }
+        }  else if (screenCmd == "vmstat") {
+            printVmstat();
         }
         else if (screenCmd == "screen -ls") {
             string report = getSystemReport();

@@ -19,6 +19,8 @@ mutex g_tick_mutex;
 condition_variable g_tick_cv;
 thread g_tick_thread;
 atomic<bool> g_keep_generating(false);
+atomic<long long> g_idle_cpu_ticks(0);
+atomic<long long> g_active_cpu_ticks(0);
 
 void tick_generator_thread() {
     while (!g_exit_flag) {
