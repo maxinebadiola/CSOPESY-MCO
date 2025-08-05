@@ -23,6 +23,7 @@ atomic<long long> g_idle_cpu_ticks(0);
 atomic<long long> g_active_cpu_ticks(0);
 atomic<long long> g_pages_paged_in(0);
 atomic<long long> g_pages_paged_out(0);
+bool debug_mode = false;
 
 void tick_generator_thread() {
     while (!g_exit_flag) {
@@ -45,24 +46,40 @@ void stopAndResetScheduler() {
     // Wake up any waiting threads
     g_tick_cv.notify_all();
     
-    // Wait for threads to finish with timeout
-    if (g_tick_thread.joinable()) {
-        g_tick_thread.join();
-    }
-    if (g_scheduler_thread.joinable()) {
-        g_scheduler_thread.join();
+    //thread exit handling
+    this_thread::sleep_for(chrono::milliseconds(100));
+    
+    //thread timeout
+    try {
+        if (g_tick_thread.joinable()) {
+            g_tick_thread.join();
+        }
+    } catch (const exception& e) {
+        cerr << "Error joining tick thread: " << e.what() << endl;
     }
     
-    // Clear worker threads
+    try {
+        if (g_scheduler_thread.joinable()) {
+            g_scheduler_thread.join();
+        }
+    } catch (const exception& e) {
+        cerr << "Error joining scheduler thread: " << e.what() << endl;
+    }
+    
+    // Clear worker threads with exception handling
     for (auto& worker : g_worker_threads) {
-        if (worker.joinable()) {
-            worker.join();
+        try {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        } catch (const exception& e) {
+            cerr << "Error joining worker thread: " << e.what() << endl;
         }
     }
     g_worker_threads.clear();
     
     // Clean up process queues and memory
-    {
+    try {
         lock_guard<mutex> lock(g_process_lists_mutex);
         
         // Clear ready queue
@@ -73,7 +90,11 @@ void stopAndResetScheduler() {
         // Deallocate running processes
         for (int i = 0; i < config_num_cpu; ++i) {
             if (g_running_processes[i] != nullptr) {
-                deallocateMemory(g_running_processes[i]);
+                try {
+                    deallocateMemory(g_running_processes[i]);
+                } catch (const exception& e) {
+                    cerr << "Error deallocating memory for process " << i << ": " << e.what() << endl;
+                }
                 g_running_processes[i] = nullptr;
             }
         }
@@ -83,6 +104,8 @@ void stopAndResetScheduler() {
         
         // Clear process storage
         g_process_storage.clear();
+    } catch (const exception& e) {
+        cerr << "Error during process cleanup: " << e.what() << endl;
     }
     
     // Reset scheduler state
@@ -94,58 +117,75 @@ void stopAndResetScheduler() {
     g_idle_cpu_ticks = 0;
     g_active_cpu_ticks = 0;
     
-    // Close paging system
-    closePagingSystem();
+    try {
+        closePagingSystem();
+    } catch (const exception& e) {
+        cerr << "Error closing paging system: " << e.what() << endl;
+    }
     
     cout << "Scheduler stopped and reset successfully." << endl;
 }
 
 void schedulerThread() {
-    while (!g_exit_flag) {
-        PCB* process_to_schedule = nullptr;
-        {
-            lock_guard<mutex> lock(g_ready_queue_mutex);
-            if (!g_ready_queue.empty()) {
-                process_to_schedule = g_ready_queue.front();
-                g_ready_queue.pop();
+    try {
+        while (!g_exit_flag) {
+            PCB* process_to_schedule = nullptr;
+            {
+                lock_guard<mutex> lock(g_ready_queue_mutex);
+                if (!g_ready_queue.empty()) {
+                    process_to_schedule = g_ready_queue.front();
+                    g_ready_queue.pop();
+                    if (debug_mode) {
+                        cout << "DEBUG: Scheduler picked up process " << process_to_schedule->name << endl;
+                    }
+                }
             }
-        }
-        if (process_to_schedule != nullptr) {
-            // 🔽 COMMENT OUT THESE TWO LINES TO STOP LOG SPAM 🔽
-            // printMemoryState("Before allocation");
-            // printMemoryState("After allocation");
-
-            bool scheduled = false;
-            while (!scheduled && !g_exit_flag) {
-                {
-                    lock_guard<mutex> lock(g_process_lists_mutex);
-                    for (int i = 0; i < config_num_cpu; ++i) {
-                        if (g_running_processes[i] == nullptr) {
-                            if (allocateMemoryFirstFit(process_to_schedule)) {
-                                process_to_schedule->state = RUNNING;
-                                process_to_schedule->core_id = i;
-                                process_to_schedule->remaining_quantum = config_quantum_cycles;
-                                g_running_processes[i] = process_to_schedule;
-                                scheduled = true;
-                                break;
+            if (process_to_schedule != nullptr) {
+                bool scheduled = false;
+                while (!scheduled && !g_exit_flag) {
+                    {
+                        lock_guard<mutex> lock(g_process_lists_mutex);
+                        for (int i = 0; i < config_num_cpu; ++i) {
+                            if (g_running_processes[i] == nullptr) {
+                                try {
+                                    if (allocateMemoryFirstFit(process_to_schedule)) {
+                                        process_to_schedule->state = RUNNING;
+                                        process_to_schedule->core_id = i;
+                                        process_to_schedule->remaining_quantum = config_quantum_cycles;
+                                        g_running_processes[i] = process_to_schedule;
+                                        if (debug_mode) {
+                                            cout << "DEBUG: Process " << process_to_schedule->name << " scheduled to core " << i << endl;
+                                        }
+                                        scheduled = true;
+                                        break;
+                                    } else {
+                                        if (debug_mode) {
+                                            cout << "DEBUG: Failed to allocate memory for process " << process_to_schedule->name << " on core " << i << endl;
+                                        }
+                                    }
+                                } catch (const exception& e) {
+                                    cerr << "Memory allocation error: " << e.what() << endl;
+                                }
                             }
                         }
                     }
-                }
-                if (!scheduled) {
-                    {
-                        lock_guard<mutex> lock(g_ready_queue_mutex);
-                        g_ready_queue.push(process_to_schedule);
+                    if (!scheduled) {
+                        {
+                            lock_guard<mutex> lock(g_ready_queue_mutex);
+                            g_ready_queue.push(process_to_schedule);
+                        }
+                        this_thread::sleep_for(chrono::milliseconds(50));
+                        break;
                     }
-                    this_thread::sleep_for(chrono::milliseconds(50));
-                    break;
                 }
+            } else {
+                this_thread::sleep_for(chrono::milliseconds(100));
             }
-            // 🔽 COMMENT OUT THIS LINE TOO 🔽
-            // printMemoryState("After allocation");
-        } else {
-            this_thread::sleep_for(chrono::milliseconds(100));
         }
+    } catch (const exception& e) {
+        cerr << "Scheduler thread crashed: " << e.what() << endl;
+    } catch (...) {
+        cerr << "Scheduler thread crashed with unknown exception" << endl;
     }
 }
 
@@ -287,6 +327,16 @@ void rr_worker_thread(int core_id) {
                 g_finished_processes.push_back(current_process);
                 g_running_processes[core_id] = nullptr;
                 deallocateMemory(current_process);
+                
+                // Prevent finished processes from accumulating indefinitely
+                if (g_finished_processes.size() > 100) {
+                    g_finished_processes.erase(g_finished_processes.begin(), 
+                                               g_finished_processes.begin() + 50);
+                }
+                
+                if (debug_mode) {
+                    cout << "DEBUG: Process " << current_process->name << " finished on core " << core_id << endl;
+                }
                 // cerr << "Core " << core_id << ": " 
                 //      << current_process->name << " FINISHED\n";
             }
@@ -336,6 +386,9 @@ void createTestProcesses(const string& screenName) {
             mem_needed
         );
         
+        if (debug_mode) {
+            cout << "DEBUG: Created process " << processName << " with " << mem_needed << " bytes memory requirement" << endl;
+        }
         g_process_storage.push_back(std::move(new_pcb));
         g_ready_queue.push(g_process_storage.back().get());
     }

@@ -10,6 +10,14 @@ bool enable_sleep = false;
 bool enable_for = false;
 
 void DECLARE(const string& var, uint16_t value) {
+    // Prevent memory exhaustion by limiting variable count
+    if (variables.size() >= 1000) {
+        // Remove oldest variables (simple approach)
+        variables.clear();
+        variables["var1"] = 0;
+        variables["var2"] = 0;
+        variables["var3"] = 0;
+    }
     variables[var] = value;
 }
 
@@ -122,9 +130,17 @@ void FOR(const vector<string>& instructions, int repeats, int nestingLevel, PCB*
 }
 
 void executeInstructionSet(const vector<string>& instructions, int nestingLevel, PCB* current_process) {
-    for (const string& instruction : instructions) {
-        if (g_exit_flag) break; 
+    if (nestingLevel > 5) {
+        return;
+    }
+
+    //just cap it lmao
+    int max_instructions = min(static_cast<int>(instructions.size()), 100);
+    
+    for (int idx = 0; idx < max_instructions; ++idx) {
+        if (g_exit_flag) break;
         
+        const string& instruction = instructions[idx];
         istringstream iss(instruction);
         string command;
         iss >> command;

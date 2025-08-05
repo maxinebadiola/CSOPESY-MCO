@@ -105,6 +105,7 @@ extern uniform_int_distribution<uint16_t> dist;
 extern bool enable_sleep;
 extern bool enable_for;
 extern atomic<bool> g_keep_generating;
+extern bool debug_mode;
 
 // Config variables
 extern int config_num_cpu;

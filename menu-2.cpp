@@ -20,7 +20,6 @@ void printInitial() {
    cout << "2. exit" << endl;
    cout << "3. enable SLEEP" << endl;
    cout << "4. enable FOR" << endl;
-   cout << "5. enable DEBUG" << endl;
 }
 
 void printMenuCommands() {
@@ -162,7 +161,7 @@ void printProcessSmi() {
             
             cout << "| " << setw(10) << process->id 
                  << " | " << setw(15) << process->name 
-                 << " | " << setw(12) << memory_usage << " bytes    |" << endl;
+                 << " | " << setw(15) << (memory_usage / 1024) << " MiB    |" << endl;
             
             has_running_processes = true;
         }
@@ -187,10 +186,6 @@ void screenSession(Console& screen) {
         getline(cin, screenCmd);
         if (screenCmd == "exit") {
             screen.currentLine++;
-            if (g_threads_started) {
-                cout << "Stopping scheduler before exiting screen session..." << endl;
-                stopAndResetScheduler();
-            }
             clearScreen();
             printMenuCommands();
             cout << "\nExiting screen session..." << endl;
@@ -225,7 +220,7 @@ void screenSession(Console& screen) {
                 thread([](string screenName) {
                     while (g_keep_generating && !g_exit_flag) {
                         createTestProcesses(screenName);
-                        this_thread::sleep_for(chrono::milliseconds(500)); // Slower generation to prevent crashes
+                        this_thread::sleep_for(chrono::milliseconds(100)); // Faster generation for test
                     }
                 }, screen.name).detach();
                 
@@ -287,14 +282,6 @@ void menuSession() {
                 enable_for = true;
                 cout << "FOR enabled." << endl;
                 continue;
-            } else if (command == "enable DEBUG") {
-                debug_mode = true;
-                cout << "DEBUG mode enabled." << endl;
-                continue;
-            } else if (command == "disable DEBUG") {
-                debug_mode = false;
-                cout << "DEBUG mode disabled." << endl;
-                continue;
             }
             else {
                 cout << "Please type 'initialize' to start or 'exit' to quit." << endl;
@@ -304,9 +291,6 @@ void menuSession() {
 
         if (command == "exit") {
             cout << "Exiting program..." << endl;
-            if (g_threads_started) {
-                stopAndResetScheduler();
-            }
             break;
         } else if (command == "clear" || command == "cls") {
             clearScreen();

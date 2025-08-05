@@ -81,15 +81,27 @@ void verifyMemoryConsistency() {
 }
 
 bool allocateMemoryFirstFit(PCB* process) {
+    if (process == nullptr) {
+        cout << "ERROR: Trying to allocate memory for null process" << endl;
+        return false;
+    }
+    
     lock_guard<mutex> lock(g_memory_mutex);
 
     int required_size = process->memory_requirement > 0 ? 
                        process->memory_requirement : 
                        g_min_mem_per_proc;
 
+    if (debug_mode) {
+        cout << "DEBUG: Trying to allocate " << required_size << " bytes for process " << process->name << endl;
+    }
+
     // Check if already allocated
     for (const auto& block : g_memory_blocks) {
         if (!block.is_free && block.process_name == process->name) {
+            if (debug_mode) {
+                cout << "DEBUG: Process " << process->name << " already has memory allocated" << endl;
+            }
             return false;
         }
     }
@@ -120,6 +132,9 @@ bool allocateMemoryFirstFit(PCB* process) {
             simulateMemoryAccess(process->name);
             
             verifyMemoryConsistency();
+            if (debug_mode) {
+                cout << "DEBUG: Successfully allocated " << required_size << " bytes for process " << process->name << endl;
+            }
             return true;
         }
     }
@@ -165,11 +180,17 @@ bool allocateMemoryFirstFit(PCB* process) {
                 simulateMemoryAccess(process->name);
                 
                 verifyMemoryConsistency();
+                if (debug_mode) {
+                    cout << "DEBUG: Successfully allocated " << required_size << " bytes for process " << process->name << " after eviction" << endl;
+                }
                 return true;
             }
         }
     }
     
+    if (debug_mode) {
+        cout << "DEBUG: Failed to allocate memory for process " << process->name << endl;
+    }
     return false;
 }
 
@@ -356,40 +377,62 @@ bool isProcessInMemory(const string& process_name) {
 }
 
 void simulateMemoryAccess(const string& process_name) {
-    // Calculate how many pages this process needs (should be 4 pages for 1024 bytes)
-    int pages_needed = calculatePagesRequired(g_min_mem_per_proc);
+    if (process_name.empty()) {
+        cout << "ERROR: simulateMemoryAccess called with empty process name" << endl;
+        return;
+    }
     
-    // For each page, simulate access and force paging
-    for (int page_num = 0; page_num < pages_needed; page_num++) {
-        bool page_found = false;
+    try {
+        // Calculate how many pages this process needs (should be 4 pages for 1024 bytes)
+        int pages_needed = calculatePagesRequired(g_min_mem_per_proc);
         
-        {
-            lock_guard<mutex> lock(g_paging_mutex);
-            // Check if page is currently in memory
-            for (auto& page : g_page_table) {
-                if (page.process_name == process_name && page.page_number == page_num) {
-                    if (page.is_in_memory) {
-                        page.last_access_time = time(nullptr);
-                        page_found = true;
+        if (pages_needed <= 0) {
+            cout << "ERROR: Invalid pages_needed: " << pages_needed << " for process " << process_name << endl;
+            return;
+        }
+        
+        // For each page, simulate access and force paging
+        for (int page_num = 0; page_num < pages_needed; page_num++) {
+            bool page_found = false;
+            
+            {
+                lock_guard<mutex> lock(g_paging_mutex);
+                // Check if page is currently in memory
+                for (auto& page : g_page_table) {
+                    if (page.process_name == process_name && page.page_number == page_num) {
+                        if (page.is_in_memory) {
+                            page.last_access_time = time(nullptr);
+                            page_found = true;
+                        }
+                        break;
                     }
-                    break;
                 }
             }
+            
+            // If page not in memory or doesn't exist, we need to page it in
+            // This will force eviction of other processes due to limited memory
+            if (!page_found) {
+                pageIn(process_name, page_num);
+            }
         }
-        
-        // If page not in memory or doesn't exist, we need to page it in
-        // This will force eviction of other processes due to limited memory
-        if (!page_found) {
-            pageIn(process_name, page_num);
-        }
+    } catch (const exception& e) {
+        cerr << "Error in simulateMemoryAccess for " << process_name << ": " << e.what() << endl;
+    } catch (...) {
+        cerr << "Unknown error in simulateMemoryAccess for " << process_name << endl;
     }
 }
 
 void closePagingSystem() {
-    if (g_backing_store.is_open()) {
-        g_backing_store << "\nPaging session ended.\n";
-        g_backing_store << "Total pages paged in: " << g_pages_paged_in.load() << "\n";
-        g_backing_store << "Total pages paged out: " << g_pages_paged_out.load() << "\n";
-        g_backing_store.close();
+    try {
+        if (g_backing_store.is_open()) {
+            g_backing_store << "\nPaging session ended.\n";
+            g_backing_store << "Total pages paged in: " << g_pages_paged_in.load() << "\n";
+            g_backing_store << "Total pages paged out: " << g_pages_paged_out.load() << "\n";
+            g_backing_store.close();
+        }
+    } catch (const exception& e) {
+        cerr << "Error closing paging system: " << e.what() << endl;
+    } catch (...) {
+        cerr << "Unknown error closing paging system" << endl;
     }
 }
