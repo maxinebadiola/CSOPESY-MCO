@@ -1,4 +1,6 @@
+// menu.cpp
 #include "headers.h"
+#include <iomanip>
 
 void printHeader() {
     cout << R"(
@@ -99,6 +101,79 @@ void printVmstat() {
     // printf("      %lld pages paged out\n", g_pages_paged_out.load());
 }
 
+void printProcessSmi() {
+    lock_guard<mutex> memory_lock(g_memory_mutex);
+    lock_guard<mutex> process_lock(g_process_lists_mutex);
+
+    // Calculate memory statistics
+    int total_memory = g_max_overall_mem;
+    int used_memory = 0;
+    int free_memory = 0;
+    
+    for (const auto& block : g_memory_blocks) {
+        if (block.is_free) {
+            free_memory += block.size;
+        } else {
+            used_memory += block.size;
+        }
+    }
+
+    cout << "\n";
+    cout << "+-----------------------------------------------------------------------------------------+" << endl;
+    cout << "| PROCESS-SMI V01.00    Driver Version: 1.1.0                                           |" << endl;
+    cout << "+-----------------------------------------------------------------------------------------+" << endl;
+    
+    // Print CPU utilization info
+    long long idle_ticks = g_idle_cpu_ticks.load();
+    long long active_ticks = g_active_cpu_ticks.load();
+    long long total_ticks = idle_ticks + active_ticks;
+    
+    double cpu_util = 0.0;
+    if (total_ticks > 0) {
+        cpu_util = (double)active_ticks / total_ticks * 100.0;
+    }
+
+    cout << "| CPU-Util: " << fixed << setprecision(0) << cpu_util << "%      " 
+         << "Memory Usage: " << used_memory / 1024 << "MiB / " << total_memory / 1024 << "MiB      "
+         << "Memory Util: " << fixed << setprecision(0) 
+         << (total_memory > 0 ? (double)used_memory / total_memory * 100.0 : 0.0) << "%   |" << endl;
+    
+    cout << "+-----------------------------------------------------------------------------------------+" << endl;
+    cout << "|                                 Running processes and memory usage:                    |" << endl;
+    cout << "+-----------------------------------------------------------------------------------------+" << endl;
+    cout << "| Process ID |   Process Name   |    Memory Usage    |" << endl;
+    cout << "+-----------------------------------------------------------------------------------------+" << endl;
+
+    // Get memory usage for each process from memory blocks
+    map<string, int> process_memory_usage;
+    for (const auto& block : g_memory_blocks) {
+        if (!block.is_free && !block.process_name.empty()) {
+            process_memory_usage[block.process_name] += block.size;
+        }
+    }
+
+    // Display running processes
+    bool has_running_processes = false;
+    for (int i = 0; i < config_num_cpu; ++i) {
+        if (g_running_processes[i] != nullptr) {
+            PCB* process = g_running_processes[i];
+            int memory_usage = process_memory_usage[process->name];
+            
+            cout << "| " << setw(10) << process->id 
+                 << " | " << setw(15) << process->name 
+                 << " | " << setw(15) << (memory_usage / 1024) << " MiB    |" << endl;
+            
+            has_running_processes = true;
+        }
+    }
+
+    if (!has_running_processes) {
+        cout << "|            No running processes found                                                   |" << endl;
+    }
+
+    cout << "+-----------------------------------------------------------------------------------------+" << endl;
+}
+
 void screenSession(Console& screen) {
     clearScreen(); 
     cout << "==== SCREEN SESSION: " << screen.name << " ====" << endl;
@@ -154,58 +229,8 @@ void screenSession(Console& screen) {
             stopAndResetScheduler();
             screen.currentLine++;
         } else if (screenCmd == "process-smi") {
+            printProcessSmi();
             screen.currentLine++;
-
-            PCB* currentProcess = nullptr;
-            {
-                lock_guard<mutex> lock(g_process_lists_mutex);
-                for (int i = 0; i < config_num_cpu; ++i) {
-                    if (g_running_processes[i] && g_running_processes[i]->name.find(screen.name) != string::npos) {
-                        currentProcess = g_running_processes[i];
-                        break;
-                    }
-                }
-                if (!currentProcess) {
-                    for (const auto& p : g_finished_processes) {
-                        if (p->name.find(screen.name) != string::npos) {
-                            currentProcess = p;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (currentProcess) {
-                cout << "\n==== PROCESS-SMI ====" << endl;
-                cout << "Name: " << currentProcess->name << endl;
-                cout << "ID: " << currentProcess->id << endl;
-                cout << "State: ";
-                switch(currentProcess->state) {
-                    case READY: cout << "READY"; break;
-                    case RUNNING: cout << "RUNNING"; break;
-                    case FINISHED: cout << "FINISHED"; break;
-                }
-                cout << endl;
-
-                cout << "Created At: " << format_timestamp_for_display(currentProcess->creation_time) << endl;
-                cout << "Instructions: " << currentProcess->instructions_executed.load() 
-                    << " / " << currentProcess->instructions_total << endl;
-
-                if (currentProcess->state == FINISHED) {
-                    cout << "Status: Finished!" << endl;
-                }
-
-                cout << "\n==== LOGS ====" << endl;
-                if (!currentProcess->logs.empty()) {
-                    for (const auto& log : currentProcess->logs) {
-                        cout << log << endl;
-                    }
-                } else {
-                    cout << "No PRINT logs recorded yet." << endl;
-                }
-            } else {
-                cout << "No process found associated with this screen." << endl;
-            }
         }  else if (screenCmd == "vmstat") {
             printVmstat();
         }
