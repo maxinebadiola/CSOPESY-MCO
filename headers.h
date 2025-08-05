@@ -74,6 +74,7 @@ void stopAndResetScheduler();
 void schedulerThread();
 void clearScreen();
 string getSystemReport();
+string getVMStatReport();
 void createTestProcesses(const string& screenName);
 void menuSession();
 void screenSession(Console& screen);
@@ -135,6 +136,31 @@ struct MemoryBlock {
     string process_name;
 };
 
+// Page structure for demand paging
+struct Page {
+    int virtual_page_number;
+    int physical_frame_number;
+    bool is_in_memory;
+    bool is_dirty;
+    string process_name;
+    int last_access_time;
+    
+    Page() : virtual_page_number(-1), physical_frame_number(-1), 
+             is_in_memory(false), is_dirty(false), process_name(""), 
+             last_access_time(0) {}
+};
+
+// Frame structure for physical memory
+struct Frame {
+    bool is_free;
+    int virtual_page_number;
+    string process_name;
+    int last_access_time;
+    
+    Frame() : is_free(true), virtual_page_number(-1), 
+              process_name(""), last_access_time(0) {}
+};
+
 // Memory space for processes
 extern vector<uint16_t> g_memory_space;
 extern mutex g_memory_space_mutex;
@@ -147,6 +173,20 @@ extern int g_mem_per_frame;
 extern int g_min_mem_per_proc;
 extern int g_max_mem_per_proc;
 
+// Demand paging structures
+extern vector<Frame> g_physical_frames;
+extern map<string, vector<Page>> g_process_page_tables;
+extern mutex g_paging_mutex;
+extern int g_total_frames;
+extern atomic<int> g_access_counter;
+
+// Statistics tracking
+extern atomic<unsigned long long> g_total_cpu_ticks;
+extern atomic<unsigned long long> g_idle_cpu_ticks;
+extern atomic<unsigned long long> g_active_cpu_ticks;
+extern atomic<int> g_pages_paged_in;
+extern atomic<int> g_pages_paged_out;
+
 void initializeMemory();
 void initializeMemorySpace(int size);
 bool allocateMemoryFirstFit(PCB* process);
@@ -156,6 +196,19 @@ int calculatePagesRequired(int memorySize);
 bool isValidMemoryAddress(int address);
 uint16_t readMemory(int address);
 void writeMemory(int address, uint16_t value);
+
+// Demand paging functions
+void initializePaging();
+bool allocateMemoryPaging(PCB* process);
+void deallocateMemoryPaging(PCB* process);
+int handlePageFault(const string& process_name, int virtual_page);
+int findFreeFrame();
+int selectVictimFrame();
+void loadPageFromBackingStore(const string& process_name, int virtual_page, int frame_number);
+void savePageToBackingStore(const string& process_name, int virtual_page, int frame_number);
+bool isPageInMemory(const string& process_name, int virtual_page);
+int getPhysicalAddress(const string& process_name, int virtual_address);
+void printPagingState(const string& context);
 
 void printMemoryState(const char* context);
 

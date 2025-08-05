@@ -36,11 +36,13 @@ void printScreenCommands() {
     cout << "==== SCREEN COMMANDS ====" << endl;
     cout << "1. scheduler-start" << endl;
     cout << "2. scheduler-stop" << endl;
-    cout << "3. process-smi" << endl;
-    cout << "4. screen -ls" << endl;
-    cout << "5. screen" << endl;
-    cout << "6. clear / cls" << endl; 
-    cout << "7. exit" << endl;
+    cout << "3. scheduler-test" << endl;
+    cout << "4. process-smi" << endl;
+    cout << "5. vmstat" << endl;
+    cout << "6. screen -ls" << endl;
+    cout << "7. screen" << endl;
+    cout << "8. clear / cls" << endl; 
+    cout << "9. exit" << endl;
 }
 
 Console::Console(const string& name, int total) {
@@ -119,6 +121,37 @@ void screenSession(Console& screen) {
                 }, screen.name).detach();
             }
             screen.currentLine++;
+        } else if (screenCmd == "scheduler-test") {
+            if (!g_threads_started) {
+                cout << "Starting " << config_scheduler << " scheduler with " 
+                    << config_num_cpu << " CPU cores..." << endl;
+                
+                g_keep_generating = true;  // Enable generation
+                g_tick_thread = thread(tick_generator_thread);
+                g_scheduler_thread = thread(schedulerThread);
+                
+                for (int i = 0; i < config_num_cpu; ++i) {
+                    if (current_scheduler_type == FCFS) {
+                        g_worker_threads.emplace_back(fcfs_worker_thread, i);
+                    } else {
+                        g_worker_threads.emplace_back(rr_worker_thread, i);
+                    }
+                }
+                g_threads_started = true;
+                
+                // Start generation thread for testing with specific behavior
+                thread([](string screenName) {
+                    while (g_keep_generating) {
+                        createTestProcesses(screenName);
+                        this_thread::sleep_for(chrono::milliseconds(100)); // Faster generation for testing
+                    }
+                }, screen.name).detach();
+            }
+            screen.currentLine++;
+        } else if (screenCmd == "vmstat") {
+            screen.currentLine++;
+            string vmstat_report = getVMStatReport();
+            cout << vmstat_report;
         } else if (screenCmd == "scheduler-stop") {
             cout << "Stopping and resetting the scheduler..." << endl;
             stopAndResetScheduler();
@@ -143,32 +176,34 @@ void screenSession(Console& screen) {
                         }
                     }
                 }
+                if (!currentProcess) {
+                    lock_guard<mutex> cancelled_lock(g_cancelled_processes_mutex);
+                    for (const auto& cp : g_cancelled_processes) {
+                        if (cp.process->name.find(screen.name) != string::npos) {
+                            currentProcess = cp.process;
+                            break;
+                        }
+                    }
+                }
             }
 
             if (currentProcess) {
-                cout << "\n==== PROCESS-SMI ====" << endl;
-                cout << "Name: " << currentProcess->name << endl;
                 cout << "ID: " << currentProcess->id << endl;
-                cout << "State: ";
-                switch(currentProcess->state) {
-                    case READY: cout << "READY"; break;
-                    case RUNNING: cout << "RUNNING"; break;
-                    case FINISHED: cout << "FINISHED"; break;
-                }
-                cout << endl;
-
-                cout << "Created At: " << format_timestamp_for_display(currentProcess->creation_time) << endl;
-                cout << "Instructions: " << currentProcess->instructions_executed.load() 
-                    << " / " << currentProcess->instructions_total << endl;
-
+                
                 if (currentProcess->state == FINISHED) {
-                    cout << "Status: Finished!" << endl;
+                    cout << "Finished!" << endl;
                 }
-
-                cout << "\n==== LOGS ====" << endl;
+                
+                cout << "Logs" << endl;
                 if (!currentProcess->logs.empty()) {
                     for (const auto& log : currentProcess->logs) {
-                        cout << log << endl;
+                        // Format: DD/MM/YYYY HH:MM:SS Core: "log message"
+                        time_t now = time(0);
+                        tm* localTime = localtime(&now);
+                        char timeBuffer[20];
+                        strftime(timeBuffer, sizeof(timeBuffer), "%d/%m/%Y %H:%M:%S", localTime);
+                        
+                        cout << timeBuffer << " Core:" << currentProcess->core_id << " \"" << log << "\"" << endl;
                     }
                 } else {
                     cout << "No PRINT logs recorded yet." << endl;

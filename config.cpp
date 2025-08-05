@@ -15,6 +15,20 @@ int g_min_mem_per_proc;
 int g_max_mem_per_proc;
 SchedulerType current_scheduler_type;
 
+// Declare extern variables for demand paging
+extern vector<Frame> g_physical_frames;
+extern map<string, vector<Page>> g_process_page_tables;
+extern mutex g_paging_mutex;
+extern int g_total_frames;
+extern atomic<int> g_access_counter;
+
+// Statistics tracking
+extern atomic<unsigned long long> g_total_cpu_ticks;
+extern atomic<unsigned long long> g_idle_cpu_ticks;
+extern atomic<unsigned long long> g_active_cpu_ticks;
+extern atomic<int> g_pages_paged_in;
+extern atomic<int> g_pages_paged_out;
+
 void readConfigFile() {
     ifstream configFile("config.txt");
     string key;

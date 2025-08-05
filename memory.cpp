@@ -12,6 +12,20 @@ vector<uint16_t> g_memory_space;
 mutex g_memory_space_mutex;
 int g_memory_space_size = 0;
 
+// Demand paging structures
+vector<Frame> g_physical_frames;
+map<string, vector<Page>> g_process_page_tables;
+mutex g_paging_mutex;
+int g_total_frames = 0;
+atomic<int> g_access_counter(0);
+
+// Statistics tracking
+atomic<unsigned long long> g_total_cpu_ticks(0);
+atomic<unsigned long long> g_idle_cpu_ticks(0);
+atomic<unsigned long long> g_active_cpu_ticks(0);
+atomic<int> g_pages_paged_in(0);
+atomic<int> g_pages_paged_out(0);
+
 
 void initializeMemory() {
     lock_guard<mutex> lock(g_memory_mutex);
@@ -22,6 +36,9 @@ void initializeMemory() {
         true, 
         ""
     });
+    
+    // Initialize paging system
+    initializePaging();
 }
 
 void initializeMemorySpace(int size) {
@@ -201,4 +218,305 @@ void printMemorySnapshot(const string& filename) {
 
     outFile << "----start---- = 0\n";
     outFile.close();
+}
+
+// Demand Paging Implementation
+void initializePaging() {
+    lock_guard<mutex> lock(g_paging_mutex);
+    g_total_frames = g_max_overall_mem / g_mem_per_frame;
+    g_physical_frames.clear();
+    g_physical_frames.resize(g_total_frames);
+    g_process_page_tables.clear();
+    g_access_counter = 0;
+    
+    // Create or clear backing store file
+    ofstream backingStore("csopesy-backing-store.txt", ios::trunc);
+    if (backingStore.is_open()) {
+        backingStore.close();
+    }
+}
+
+bool allocateMemoryPaging(PCB* process) {
+    lock_guard<mutex> lock(g_paging_mutex);
+    
+    string process_name = process->name;
+    int required_pages = calculatePagesRequired(process->memory_requirement);
+    
+    // Check if process already has page table
+    if (g_process_page_tables.find(process_name) != g_process_page_tables.end()) {
+        return false; // Already allocated
+    }
+    
+    // Create page table for process (but don't load pages into memory yet)
+    vector<Page> page_table(required_pages);
+    for (int i = 0; i < required_pages; i++) {
+        page_table[i].virtual_page_number = i;
+        page_table[i].is_in_memory = false;
+        page_table[i].is_dirty = false;
+        page_table[i].process_name = process_name;
+        page_table[i].physical_frame_number = -1;
+        page_table[i].last_access_time = 0;
+    }
+    
+    g_process_page_tables[process_name] = page_table;
+    return true; // Always succeeds in demand paging
+}
+
+void deallocateMemoryPaging(PCB* process) {
+    lock_guard<mutex> lock(g_paging_mutex);
+    
+    string process_name = process->name;
+    
+    // Find process page table
+    auto it = g_process_page_tables.find(process_name);
+    if (it == g_process_page_tables.end()) {
+        return; // Process not found
+    }
+    
+    // Free all frames used by this process
+    for (auto& page : it->second) {
+        if (page.is_in_memory && page.physical_frame_number >= 0) {
+            // Save dirty pages to backing store before freeing
+            if (page.is_dirty) {
+                savePageToBackingStore(process_name, page.virtual_page_number, page.physical_frame_number);
+            }
+            g_physical_frames[page.physical_frame_number].is_free = true;
+            g_physical_frames[page.physical_frame_number].process_name = "";
+            g_physical_frames[page.physical_frame_number].virtual_page_number = -1;
+        }
+    }
+    
+    // Remove page table
+    g_process_page_tables.erase(it);
+}
+
+int handlePageFault(const string& process_name, int virtual_page) {
+    // This function should be called with g_paging_mutex already locked
+    
+    // Find a free frame
+    int frame_number = findFreeFrame();
+    
+    if (frame_number == -1) {
+        // No free frames, need to evict a page
+        frame_number = selectVictimFrame();
+        if (frame_number == -1) {
+            return -1; // System is deadlocked - no frames can be freed
+        }
+        
+        // Check if we're in a deadlock situation: all frames belong to currently running processes
+        // that are trying to access memory, creating a circular wait condition
+        bool potential_deadlock = true;
+        for (int i = 0; i < g_total_frames; i++) {
+            if (g_physical_frames[i].is_free) {
+                potential_deadlock = false;
+                break;
+            }
+            
+            // Check if this frame belongs to a process that's not currently running
+            // If so, we can potentially evict it
+            bool belongs_to_running_process = false;
+            for (int core = 0; core < config_num_cpu; core++) {
+                if (g_running_processes[core] != nullptr && 
+                    g_running_processes[core]->name == g_physical_frames[i].process_name) {
+                    belongs_to_running_process = true;
+                    break;
+                }
+            }
+            
+            if (!belongs_to_running_process) {
+                potential_deadlock = false;
+                break;
+            }
+        }
+        
+        // If all frames belong to running processes and we need more frames than available,
+        // this creates a deadlock situation
+        if (potential_deadlock) {
+            // Log deadlock to backing store file instead of console
+            ofstream logFile("memory-violation-log.txt", ios::app);
+            if (logFile.is_open()) {
+                logFile << "[" << getCurrentTimestampWithMillis() << "] DEADLOCK DETECTED: All frames occupied by running processes" << endl;
+                logFile.close();
+            }
+            return -1;
+        }
+        
+        // Save the victim page to backing store if dirty
+        Frame& victim_frame = g_physical_frames[frame_number];
+        if (!victim_frame.process_name.empty()) {
+            auto victim_process_it = g_process_page_tables.find(victim_frame.process_name);
+            if (victim_process_it != g_process_page_tables.end()) {
+                auto& victim_page_table = victim_process_it->second;
+                if (victim_frame.virtual_page_number < victim_page_table.size()) {
+                    Page& victim_page = victim_page_table[victim_frame.virtual_page_number];
+                    if (victim_page.is_dirty) {
+                        savePageToBackingStore(victim_frame.process_name, victim_frame.virtual_page_number, frame_number);
+                    }
+                    // Mark page as not in memory
+                    victim_page.is_in_memory = false;
+                    victim_page.physical_frame_number = -1;
+                    g_pages_paged_out++; // Increment page-out counter
+                }
+            }
+        }
+    }
+    
+    // Load the required page into the frame
+    loadPageFromBackingStore(process_name, virtual_page, frame_number);
+    g_pages_paged_in++; // Increment page-in counter
+    
+    // Update frame information
+    g_physical_frames[frame_number].is_free = false;
+    g_physical_frames[frame_number].process_name = process_name;
+    g_physical_frames[frame_number].virtual_page_number = virtual_page;
+    g_physical_frames[frame_number].last_access_time = g_access_counter++;
+    
+    // Update page table
+    auto process_it = g_process_page_tables.find(process_name);
+    if (process_it != g_process_page_tables.end() && virtual_page < process_it->second.size()) {
+        Page& page = process_it->second[virtual_page];
+        page.is_in_memory = true;
+        page.physical_frame_number = frame_number;
+        page.last_access_time = g_access_counter++;
+    }
+    
+    return frame_number;
+}
+
+int findFreeFrame() {
+    for (int i = 0; i < g_total_frames; i++) {
+        if (g_physical_frames[i].is_free) {
+            return i;
+        }
+    }
+    return -1; // No free frame found
+}
+
+int selectVictimFrame() {
+    // Use LRU (Least Recently Used) replacement algorithm
+    int victim_frame = -1;
+    int oldest_access_time = INT_MAX;
+    
+    for (int i = 0; i < g_total_frames; i++) {
+        if (!g_physical_frames[i].is_free) {
+            if (g_physical_frames[i].last_access_time < oldest_access_time) {
+                oldest_access_time = g_physical_frames[i].last_access_time;
+                victim_frame = i;
+            }
+        }
+    }
+    
+    return victim_frame;
+}
+
+void loadPageFromBackingStore(const string& process_name, int virtual_page, int frame_number) {
+    // Clear the frame (simulate loading from backing store)
+    int frame_start = frame_number * g_mem_per_frame / 2; // uint16 index
+    int frame_size = g_mem_per_frame / 2; // in uint16 units
+    
+    // Load page data from backing store file
+    ifstream backingStore("csopesy-backing-store.txt");
+    string page_key = process_name + "_page_" + to_string(virtual_page);
+    bool found = false;
+    
+    if (backingStore.is_open()) {
+        string line;
+        while (getline(backingStore, line)) {
+            if (line.find(page_key) == 0) {
+                // Found the page data, load it
+                found = true;
+                stringstream ss(line.substr(page_key.length() + 1));
+                for (int i = 0; i < frame_size && i + frame_start < g_memory_space.size(); i++) {
+                    uint16_t value;
+                    if (ss >> value) {
+                        g_memory_space[frame_start + i] = value;
+                    } else {
+                        g_memory_space[frame_start + i] = 0;
+                    }
+                }
+                break;
+            }
+        }
+        backingStore.close();
+    }
+    
+    // If not found in backing store, initialize with zeros
+    if (!found) {
+        for (int i = 0; i < frame_size && i + frame_start < g_memory_space.size(); i++) {
+            g_memory_space[frame_start + i] = 0;
+        }
+    }
+}
+
+void savePageToBackingStore(const string& process_name, int virtual_page, int frame_number) {
+    ofstream backingStore("csopesy-backing-store.txt", ios::app);
+    if (backingStore.is_open()) {
+        string page_key = process_name + "_page_" + to_string(virtual_page);
+        backingStore << page_key << ":";
+        
+        int frame_start = frame_number * g_mem_per_frame / 2; // uint16 index
+        int frame_size = g_mem_per_frame / 2; // in uint16 units
+        
+        for (int i = 0; i < frame_size && i + frame_start < g_memory_space.size(); i++) {
+            backingStore << " " << g_memory_space[frame_start + i];
+        }
+        backingStore << endl;
+        backingStore.close();
+    }
+}
+
+bool isPageInMemory(const string& process_name, int virtual_page) {
+    auto process_it = g_process_page_tables.find(process_name);
+    if (process_it == g_process_page_tables.end() || virtual_page >= process_it->second.size()) {
+        return false;
+    }
+    return process_it->second[virtual_page].is_in_memory;
+}
+
+int getPhysicalAddress(const string& process_name, int virtual_address) {
+    int virtual_page = virtual_address / g_mem_per_frame;
+    int page_offset = virtual_address % g_mem_per_frame;
+    
+    if (!isPageInMemory(process_name, virtual_page)) {
+        // Page fault occurred - attempt to handle it
+        int frame_number = handlePageFault(process_name, virtual_page);
+        if (frame_number == -1) {
+            // System deadlock - no frames can be freed
+            return -1;
+        }
+    }
+    
+    // Get the physical frame number
+    auto process_it = g_process_page_tables.find(process_name);
+    if (process_it == g_process_page_tables.end() || virtual_page >= process_it->second.size()) {
+        return -1;
+    }
+    
+    int frame_number = process_it->second[virtual_page].physical_frame_number;
+    if (frame_number == -1) {
+        return -1;
+    }
+    
+    // Update access time
+    g_physical_frames[frame_number].last_access_time = g_access_counter++;
+    process_it->second[virtual_page].last_access_time = g_access_counter++;
+    
+    return frame_number * g_mem_per_frame + page_offset;
+}
+
+void printPagingState(const string& context) {
+    lock_guard<mutex> lock(g_paging_mutex);
+    cerr << "\nPaging State (" << context << "):\n";
+    cerr << "Total Frames: " << g_total_frames << "\n";
+    
+    int free_frames = 0;
+    for (int i = 0; i < g_total_frames; i++) {
+        if (g_physical_frames[i].is_free) {
+            free_frames++;
+        } else {
+            cerr << "Frame " << i << ": " << g_physical_frames[i].process_name 
+                 << " Page " << g_physical_frames[i].virtual_page_number << "\n";
+        }
+    }
+    cerr << "Free Frames: " << free_frames << "\n";
 }

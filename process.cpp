@@ -31,6 +31,22 @@ void tick_generator_thread() {
         {
             lock_guard<mutex> lock(g_tick_mutex);
             g_cpu_ticks++;
+            
+            // Count active and idle cores for statistics
+            int active_cores = 0;
+            {
+                lock_guard<mutex> process_lock(g_process_lists_mutex);
+                for (int i = 0; i < config_num_cpu; ++i) {
+                    if (g_running_processes[i] != nullptr) {
+                        active_cores++;
+                    }
+                }
+            }
+            
+            // Update CPU tick statistics
+            g_total_cpu_ticks += config_num_cpu; // Each tick affects all cores
+            g_active_cpu_ticks += active_cores;
+            g_idle_cpu_ticks += (config_num_cpu - active_cores);
         }
         g_tick_cv.notify_all();
     }
@@ -56,7 +72,7 @@ void stopAndResetScheduler() {
     }
     for (int i = 0; i < config_num_cpu; ++i) {
         if (g_running_processes[i] != nullptr) {
-            deallocateMemory(g_running_processes[i]);  // Cleanup any running processes
+            deallocateMemoryPaging(g_running_processes[i]);  // Cleanup any running processes
         }
         g_running_processes[i] = nullptr;
     }
@@ -66,6 +82,13 @@ void stopAndResetScheduler() {
         lock_guard<mutex> lock(g_cancelled_processes_mutex);
         g_cancelled_processes.clear();
     }
+    
+    // Reset statistics
+    g_total_cpu_ticks = 0;
+    g_idle_cpu_ticks = 0;
+    g_active_cpu_ticks = 0;
+    g_pages_paged_in = 0;
+    g_pages_paged_out = 0;
     
     g_threads_started = false;
     g_exit_flag = false;
@@ -93,7 +116,7 @@ void schedulerThread() {
                     lock_guard<mutex> lock(g_process_lists_mutex);
                     for (int i = 0; i < config_num_cpu; ++i) {
                         if (g_running_processes[i] == nullptr) {
-                            if (allocateMemoryFirstFit(process_to_schedule)) {
+                            if (allocateMemoryPaging(process_to_schedule)) {
                                 process_to_schedule->state = RUNNING;
                                 process_to_schedule->core_id = i;
                                 process_to_schedule->remaining_quantum = config_quantum_cycles;
@@ -178,8 +201,7 @@ void fcfs_worker_thread(int core_id) {
                         }
                     }
                     
-                    lock_guard<mutex> lock(outputMutex);
-                    cerr << "Process " << current_process->name << " terminated due to: " << e.what() << endl;
+                    // Don't print memory violations to console, only log them
                     current_process->state = FINISHED;
                     current_process->instructions_executed = current_process->instructions_total;
                 }
@@ -204,8 +226,8 @@ void fcfs_worker_thread(int core_id) {
                     try {
                         executeInstructionSet(singleInstruction, 0, current_process);
                     } catch (const std::exception& e) {
-                        std::lock_guard<std::mutex> lock(outputMutex);
-                        std::cerr << "Error executing instruction in process " << current_process->name << ": " << e.what() << std::endl;
+                        // Don't print random instruction errors to console, only log them
+                        // Memory violations will be handled by the instruction execution system
                     }
                     current_process->instructions_executed++;
                 }
@@ -216,7 +238,7 @@ void fcfs_worker_thread(int core_id) {
                 current_process->state = FINISHED;
                 g_finished_processes.push_back(current_process);
                 g_running_processes[core_id] = nullptr;
-                deallocateMemory(current_process);
+                deallocateMemoryPaging(current_process);
             }
         } else {
             this_thread::sleep_for(chrono::milliseconds(100));
@@ -350,9 +372,7 @@ void rr_worker_thread(int core_id) {
                             }
                         }
                         
-                        lock_guard<mutex> lock(outputMutex);
-                        cerr << "Core " << core_id << ": Process " << current_process->name 
-                             << " terminated due to: " << e.what() << endl;
+                        // Don't print memory violations to console, only log them
                         current_process->state = FINISHED;
                         current_process->instructions_executed = current_process->instructions_total;
                     }
@@ -370,7 +390,7 @@ void rr_worker_thread(int core_id) {
                 current_process->state = FINISHED;
                 g_finished_processes.push_back(current_process);
                 g_running_processes[core_id] = nullptr;
-                deallocateMemory(current_process);
+                deallocateMemoryPaging(current_process);
                 // cerr << "Core " << core_id << ": " 
                 //      << current_process->name << " FINISHED\n";
             }
@@ -383,8 +403,7 @@ void rr_worker_thread(int core_id) {
                     lock_guard<mutex> ready_lock(g_ready_queue_mutex);
                     g_ready_queue.push(current_process);
                 }
-                cerr << "Core " << core_id << ": " 
-                     << current_process->name << " requeued\n";
+                // Don't print requeue messages to console
             }
         } else {
             this_thread::sleep_for(chrono::milliseconds(10));

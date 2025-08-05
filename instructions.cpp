@@ -94,25 +94,29 @@ void READ(const string& var, const string& address_str, PCB* current_process) {
     if (!current_process) return;
     
     try {
-        // Parse hexadecimal address
-        int address;
+        // Parse hexadecimal address as virtual address
+        int virtual_address;
         if (address_str.substr(0, 2) == "0x" || address_str.substr(0, 2) == "0X") {
-            address = stoi(address_str, nullptr, 16);
+            virtual_address = stoi(address_str, nullptr, 16);
         } else {
             throw invalid_argument("Invalid address format");
         }
         
-        if (!isValidMemoryAddress(address)) {
-            // Log the violation and shut down the process
+        // Use demand paging to get physical address
+        lock_guard<mutex> lock(g_paging_mutex);
+        int physical_address = getPhysicalAddress(current_process->name, virtual_address);
+        
+        if (physical_address == -1) {
+            // Page fault handling failed or system deadlock
             ofstream logFile("log.txt", ios::app);
             if (logFile.is_open()) {
                 time_t now = time(0);
                 logFile << "Process " << current_process->name 
                         << " memory access violation at " << getCurrentTimestampWithMillis() 
-                        << ". " << address_str << " invalid." << endl;
+                        << ". " << address_str << " - page fault." << endl;
                 logFile.close();
             }
-            throw runtime_error("Memory access violation at address " + address_str);
+            throw runtime_error("Memory access violation at address " + address_str + " - page fault");
         }
         
         // Check symbol table limit before adding new variable
@@ -122,7 +126,7 @@ void READ(const string& var, const string& address_str, PCB* current_process) {
             return;
         }
         
-        uint16_t value = readMemory(address);
+        uint16_t value = readMemory(physical_address);
         current_process->symbol_table[var] = value;
         
     } catch (const exception& e) {
@@ -143,29 +147,40 @@ void WRITE(const string& address_str, const string& value_str, PCB* current_proc
     if (!current_process) return;
     
     try {
-        // Parse hexadecimal address
-        int address;
+        // Parse hexadecimal address as virtual address
+        int virtual_address;
         if (address_str.substr(0, 2) == "0x" || address_str.substr(0, 2) == "0X") {
-            address = stoi(address_str, nullptr, 16);
+            virtual_address = stoi(address_str, nullptr, 16);
         } else {
             throw invalid_argument("Invalid address format");
         }
         
-        if (!isValidMemoryAddress(address)) {
-            // Log the violation and shut down the process
+        // Use demand paging to get physical address
+        lock_guard<mutex> lock(g_paging_mutex);
+        int physical_address = getPhysicalAddress(current_process->name, virtual_address);
+        
+        if (physical_address == -1) {
+            // Page fault handling failed or system deadlock
             ofstream logFile("log.txt", ios::app);
             if (logFile.is_open()) {
                 time_t now = time(0);
                 logFile << "Process " << current_process->name 
                         << " memory access violation at " << getCurrentTimestampWithMillis() 
-                        << ". " << address_str << " invalid." << endl;
+                        << ". " << address_str << " - page fault." << endl;
                 logFile.close();
             }
-            throw runtime_error("Memory access violation at address " + address_str);
+            throw runtime_error("Memory access violation at address " + address_str + " - page fault");
         }
         
         uint16_t value = getValue(value_str, current_process);
-        writeMemory(address, value);
+        writeMemory(physical_address, value);
+        
+        // Mark the page as dirty
+        int virtual_page = virtual_address / g_mem_per_frame;
+        auto process_it = g_process_page_tables.find(current_process->name);
+        if (process_it != g_process_page_tables.end() && virtual_page < process_it->second.size()) {
+            process_it->second[virtual_page].is_dirty = true;
+        }
         
     } catch (const exception& e) {
         // Log the violation and shut down the process
