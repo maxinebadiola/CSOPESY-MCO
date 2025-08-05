@@ -21,6 +21,8 @@ thread g_tick_thread;
 atomic<bool> g_keep_generating(false);
 atomic<long long> g_idle_cpu_ticks(0);
 atomic<long long> g_active_cpu_ticks(0);
+atomic<long long> g_pages_paged_in(0);
+atomic<long long> g_pages_paged_out(0);
 
 void tick_generator_thread() {
     while (!g_exit_flag) {
@@ -34,33 +36,68 @@ void tick_generator_thread() {
 }
 
 void stopAndResetScheduler() {
+    cout << "Stopping scheduler threads..." << endl;
+    
+    // Signal all threads to stop
     g_exit_flag = true;
     g_keep_generating = false;
+    
+    // Wake up any waiting threads
+    g_tick_cv.notify_all();
+    
+    // Wait for threads to finish with timeout
     if (g_tick_thread.joinable()) {
         g_tick_thread.join();
     }
     if (g_scheduler_thread.joinable()) {
         g_scheduler_thread.join();
     }
+    
+    // Clear worker threads
     for (auto& worker : g_worker_threads) {
         if (worker.joinable()) {
             worker.join();
         }
     }
-    lock_guard<mutex> lock(g_process_lists_mutex);
-    while (!g_ready_queue.empty()) {
-        g_ready_queue.pop();
-    }
-    for (int i = 0; i < config_num_cpu; ++i) {
-        if (g_running_processes[i] != nullptr) {
-            deallocateMemory(g_running_processes[i]);  // Cleanup any running processes
+    g_worker_threads.clear();
+    
+    // Clean up process queues and memory
+    {
+        lock_guard<mutex> lock(g_process_lists_mutex);
+        
+        // Clear ready queue
+        while (!g_ready_queue.empty()) {
+            g_ready_queue.pop();
         }
-        g_running_processes[i] = nullptr;
+        
+        // Deallocate running processes
+        for (int i = 0; i < config_num_cpu; ++i) {
+            if (g_running_processes[i] != nullptr) {
+                deallocateMemory(g_running_processes[i]);
+                g_running_processes[i] = nullptr;
+            }
+        }
+        
+        // Clear finished processes
+        g_finished_processes.clear();
+        
+        // Clear process storage
+        g_process_storage.clear();
     }
-    g_finished_processes.clear();
+    
+    // Reset scheduler state
     g_threads_started = false;
-    g_exit_flag = false;
-    cout << "Scheduler and process generation stopped successfully." << endl;
+    g_exit_flag = false;  // Reset for next run
+    
+    // Reset CPU tick counters
+    g_cpu_ticks = 0;
+    g_idle_cpu_ticks = 0;
+    g_active_cpu_ticks = 0;
+    
+    // Close paging system
+    closePagingSystem();
+    
+    cout << "Scheduler stopped and reset successfully." << endl;
 }
 
 void schedulerThread() {
@@ -146,6 +183,9 @@ void fcfs_worker_thread(int core_id) {
                 
                 if (g_exit_flag) break;
                 
+                // Simulate memory access for paging on EVERY instruction
+                simulateMemoryAccess(current_process->name);
+                
                 std::vector<std::string> singleInstruction = generateRandomInstructions(
                     current_process->name, 1, enable_sleep, enable_for);
                 try {
@@ -220,6 +260,9 @@ void rr_worker_thread(int core_id) {
                 }
                 
                 if (!g_exit_flag.load()) {
+                    // Simulate memory access for paging on EVERY instruction
+                    simulateMemoryAccess(current_process->name);
+                    
                     try {
                         auto instruction = generateRandomInstructions(
                             current_process->name, 1, enable_sleep, enable_for);
@@ -278,12 +321,15 @@ void createTestProcesses(const string& screenName) {
         string processName = "P" + to_string(process_counter++); // Use sequential counter
         string filename = "screen_" + processName + ".txt";
         
+        // Use configured instruction count range
+        int instruction_count = config_min_ins + (rand() % (config_max_ins - config_min_ins + 1));
+        
         auto new_pcb = make_unique<PCB>(
             process_counter - 1, // Use counter as ID
             processName,
             READY, 
             time(0), 
-            rand() % 50 + 10, // 10-60 instructions
+            instruction_count, // Use configured instruction count
             0,
             filename,
             -1,
