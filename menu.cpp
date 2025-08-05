@@ -26,11 +26,12 @@ void printMenuCommands() {
     cout << "==== MAIN MENU ====" << endl;
     cout << "Available Commands:" << endl;
     cout << "1. screen -s <name> <process_memory_size>" << endl;
-    cout << "2. screen -r <name>" << endl;
-    cout << "3. screen -ls" << endl;
-    cout << "4. report-util" << endl;
-    cout << "5. clear / cls" << endl;
-    cout << "6. exit" << endl;
+    cout << "2. screen -c <process_name> <process_memory_size> \"<instructions>\"" << endl;
+    cout << "3. screen -r <name>" << endl;
+    cout << "4. screen -ls" << endl;
+    cout << "5. report-util" << endl;
+    cout << "6. clear / cls" << endl;
+    cout << "7. exit" << endl;
 }
 
 void printScreenCommands() {
@@ -317,33 +318,196 @@ void menuSession() {
                 clearScreen();
                 printMenuCommands();
             }
+        } else if (command.find("screen -c ") == 0) {
+            // Parse screen -c command: screen -c <process_name> <process_memory_size> "<instructions>"
+            string remaining = command.substr(10); // Remove "screen -c "
+            
+            // Find the start and end of the quoted instructions
+            size_t quote_start = remaining.find('"');
+            size_t quote_end = remaining.rfind('"');
+            
+            if (quote_start == string::npos || quote_end == string::npos || quote_start == quote_end) {
+                cout << "Invalid command format. Usage: screen -c <process_name> <process_memory_size> \"<instructions>\"" << endl;
+                continue;
+            }
+            
+            // Extract process name, memory size, and instructions
+            string before_quote = remaining.substr(0, quote_start);
+            string instructions_str = remaining.substr(quote_start + 1, quote_end - quote_start - 1);
+            
+            istringstream iss(before_quote);
+            string process_name;
+            int mem_size = 0;
+            
+            if (!(iss >> process_name >> mem_size)) {
+                cout << "Invalid command format. Usage: screen -c <process_name> <process_memory_size> \"<instructions>\"" << endl;
+                continue;
+            }
+            
+            // Validate memory size
+            bool isPowerOf2 = (mem_size > 0) && ((mem_size & (mem_size - 1)) == 0);
+            if (mem_size < 64 || mem_size > 65536 || !isPowerOf2) {
+                cout << "Invalid memory allocation. Memory must be a power of 2 between 2^6 (64) and 2^16 (65536) bytes." << endl;
+                continue;
+            }
+            
+            // Parse instructions (simple semicolon-separated parsing)
+            vector<string> instructions;
+            istringstream instr_stream(instructions_str);
+            string instruction;
+            while (getline(instr_stream, instruction, ';')) {
+                // Trim whitespace
+                instruction.erase(0, instruction.find_first_not_of(" \t"));
+                instruction.erase(instruction.find_last_not_of(" \t") + 1);
+                if (!instruction.empty()) {
+                    instructions.push_back(instruction);
+                }
+            }
+            
+            // Validate instructions (1-50 instructions)
+            if (instructions.empty() || instructions.size() > 50) {
+                cout << "Invalid command. Instructions must be 1-50 semicolon-separated commands." << endl;
+                continue;
+            }
+            
+            // Check if process already exists
+            if (screens.find(process_name) != screens.end()) {
+                cout << "Screen session already exists: " << process_name << endl;
+                cout << "Created At: " << screens[process_name].timestamp << endl;
+                continue;
+            }
+            
+            // Create a new process with custom instructions
+            static int custom_process_counter = 1;
+            auto new_pcb = make_unique<PCB>(
+                custom_process_counter++,
+                process_name,
+                RUNNING,
+                time(0),
+                static_cast<int>(instructions.size()),
+                0,
+                "screen_" + process_name + ".txt",
+                -1,
+                mem_size
+            );
+            
+            // Create screen session
+            Console newScreen(process_name, mem_size);
+            screens[process_name] = newScreen;
+            
+            // Execute the instructions immediately
+            try {
+                cout << "Executing process " << process_name << " with " << instructions.size() 
+                     << " custom instructions..." << endl;
+                
+                executeInstructionSet(instructions, 0, new_pcb.get());
+                new_pcb->instructions_executed = new_pcb->instructions_total;
+                new_pcb->state = FINISHED;
+                
+                cout << "Process " << process_name << " completed successfully." << endl;
+                
+                // Add to finished processes
+                {
+                    lock_guard<mutex> lock(g_process_lists_mutex);
+                    g_finished_processes.push_back(new_pcb.get());
+                }
+                
+            } catch (const exception& e) {
+                // Handle any errors
+                cout << "Process " << process_name << " terminated due to: " << e.what() << endl;
+                new_pcb->state = FINISHED;
+                new_pcb->instructions_executed = new_pcb->instructions_total;
+                
+                // Add to finished processes
+                {
+                    lock_guard<mutex> lock(g_process_lists_mutex);
+                    g_finished_processes.push_back(new_pcb.get());
+                }
+            }
+            
+            // Add to storage
+            g_process_storage.push_back(std::move(new_pcb));
         } else if (command.find("screen -r ") == 0) {
             string name = command.substr(10);
             if (name.empty()) {
                 cout << "Please provide a name to resume a screen session." << endl;
-            } else if (screens.find(name) == screens.end()) {
-                cout << "Process " << name << " not found." << endl;
             } else {
-                // Check log.txt for memory access violation error
-                ifstream logFile("log.txt");
-                bool violationFound = false;
-                string line, violationTime, violationAddr;
+                // Find the process in the system
+                PCB* target_process = nullptr;
+                bool process_exists = false;
                 
-                while (getline(logFile, line)) {
-                    string searchStr = "process " + name + " violation error";
-                    if (line.find(searchStr) != string::npos) {
-                        violationFound = true;
-                        break;
+                {
+                    lock_guard<mutex> lock(g_process_lists_mutex);
+                    
+                    // First check running processes
+                    for (int i = 0; i < config_num_cpu; ++i) {
+                        if (g_running_processes[i] && g_running_processes[i]->name == name) {
+                            target_process = g_running_processes[i];
+                            process_exists = true;
+                            break;
+                        }
+                    }
+                    
+                    // If not found in running, check finished processes
+                    if (!target_process) {
+                        for (const auto& p : g_finished_processes) {
+                            if (p->name == name) {
+                                target_process = p;
+                                process_exists = true;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // If still not found, check process storage
+                    if (!target_process) {
+                        for (const auto& stored_process : g_process_storage) {
+                            if (stored_process->name == name) {
+                                target_process = stored_process.get();
+                                process_exists = true;
+                                break;
+                            }
+                        }
                     }
                 }
-                logFile.close();
                 
-                if (violationFound) {
-                    cout << "Process " << name << " shut down due to memory access violation error." << endl;
+                if (!process_exists) {
+                    // Check if screen session exists but no process found
+                    if (screens.find(name) != screens.end()) {
+                        // Screen session exists, enter it
+                        screenSession(screens[name]);
+                        clearScreen();
+                        printMenuCommands();
+                    } else {
+                        cout << "Process " << name << " not found." << endl;
+                    }
+                } else if (target_process->state == FINISHED) {
+                    // Process finished, show its information and output
+                    cout << "\n==== PROCESS: " << name << " (FINISHED) ====" << endl;
+                    cout << "ID: " << target_process->id << endl;
+                    cout << "Created At: " << format_timestamp_for_display(target_process->creation_time) << endl;
+                    cout << "Instructions: " << target_process->instructions_executed.load() 
+                         << " / " << target_process->instructions_total << endl;
+                    cout << "Status: Finished!" << endl;
+                    
+                    cout << "\n==== PROCESS OUTPUT ====" << endl;
+                    if (!target_process->logs.empty()) {
+                        for (const auto& log : target_process->logs) {
+                            cout << log << endl;
+                        }
+                    } else {
+                        cout << "No output recorded." << endl;
+                    }
+                    cout << "=========================" << endl;
                 } else {
-                    screenSession(screens[name]);
-                    clearScreen();
-                    printMenuCommands();
+                    // Process is still running or in ready queue, enter screen session
+                    if (screens.find(name) != screens.end()) {
+                        screenSession(screens[name]);
+                        clearScreen();
+                        printMenuCommands();
+                    } else {
+                        cout << "Screen session for " << name << " not found." << endl;
+                    }
                 }
             } 
         } else if (command == "screen -ls") {
