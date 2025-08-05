@@ -9,7 +9,7 @@ void printHeader() {
  | |____ ____) | |__| | |    | |____ ____) |  | |   
   \_____|_____/ \____/|_|    |______|_____/   |_|   
 
-                  CSOPESY CLI EMULATOR [screen -r test]
+            CSOPESY CLI EMULATOR 
 )" << endl;
 }
 
@@ -69,6 +69,36 @@ void clearScreen() {
        system("clear");
    #endif
    printHeader();
+}
+
+void printVmstat() {
+    lock_guard<mutex> lock(g_memory_mutex);
+
+    int total_memory = g_max_overall_mem;
+    int used_memory = 0;
+    int free_memory = 0;
+    
+    for (const auto& block : g_memory_blocks) {
+        if (block.is_free) {
+            free_memory += block.size;
+        } else {
+            used_memory += block.size;
+        }
+    }
+
+    long long idle_ticks = g_idle_cpu_ticks.load();
+    long long active_ticks = g_active_cpu_ticks.load();
+    long long total_ticks = idle_ticks + active_ticks;
+
+    printf("\n");
+    printf("      %d K total memory\n", total_memory / 1024);
+    printf("      %d K used memory\n", used_memory / 1024);
+    printf("      %d K free memory\n", free_memory / 1024);
+    printf("      %lld idle cpu ticks\n", idle_ticks);
+    printf("      %lld active cpu ticks\n", active_ticks);
+    printf("      %lld total cpu ticks\n", total_ticks);
+    printf("      %lld pages paged in\n", g_pages_paged_in.load());
+    printf("      %lld pages paged out\n", g_pages_paged_out.load());
 }
 
 void screenSession(Console& screen) {
@@ -149,9 +179,8 @@ void screenSession(Console& screen) {
             }
             screen.currentLine++;
         } else if (screenCmd == "vmstat") {
+            printVmstat();
             screen.currentLine++;
-            string vmstat_report = getVMStatReport();
-            cout << vmstat_report;
         } else if (screenCmd == "scheduler-stop") {
             cout << "Stopping and resetting the scheduler..." << endl;
             stopAndResetScheduler();
