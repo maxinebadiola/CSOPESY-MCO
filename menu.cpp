@@ -71,7 +71,7 @@ void clearScreen() {
 
 void printVmstat() {
     lock_guard<mutex> lock(g_memory_mutex);
-    
+
     int total_memory = g_max_overall_mem;
     int used_memory = 0;
     int free_memory = 0;
@@ -84,15 +84,9 @@ void printVmstat() {
         }
     }
 
-    unsigned long long total_cpu_ticks = g_cpu_ticks.load(); 
     long long idle_ticks = g_idle_cpu_ticks.load();
     long long active_ticks = g_active_cpu_ticks.load();
-    long long total_accounted = idle_ticks + active_ticks;
-
-    long long remaining_ticks = (long long)(total_cpu_ticks * config_num_cpu) - total_accounted;
-    if (remaining_ticks > 0) {
-        idle_ticks += remaining_ticks;  
-    }
+    long long total_ticks = idle_ticks + active_ticks;
 
     printf("\n");
     printf("      %d K total memory\n", total_memory / 1024);
@@ -100,7 +94,7 @@ void printVmstat() {
     printf("      %d K free memory\n", free_memory / 1024);
     printf("      %lld idle cpu ticks\n", idle_ticks);
     printf("      %lld active cpu ticks\n", active_ticks);
-    printf("      %lld total cpu ticks (across all cores)\n", idle_ticks + active_ticks);
+    printf("      %lld total cpu ticks\n", total_ticks);
     // printf("      %lld pages paged in\n", g_pages_paged_in.load());
     // printf("      %lld pages paged out\n", g_pages_paged_out.load());
 }

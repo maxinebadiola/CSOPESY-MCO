@@ -121,11 +121,16 @@ void fcfs_worker_thread(int core_id) {
                 current_process = g_running_processes[core_id];
             }
         }
+        
         if (current_process != nullptr) {
+            // ACTIVE: Core is executing a process
+            g_active_cpu_ticks++;
+            
             variables.clear();
             variables["var1"] = 0;
             variables["var2"] = 0;
             variables["var3"] = 0;
+            
             while (current_process->instructions_executed < current_process->instructions_total && !g_exit_flag) {
                 for (int tick_count = 0; tick_count < config_delay_per_exec; ++tick_count) {
                     if (g_exit_flag) break;
@@ -134,8 +139,13 @@ void fcfs_worker_thread(int core_id) {
                     g_tick_cv.wait(lock, [&]{
                         return g_cpu_ticks.load() > last_known_tick || g_exit_flag.load();
                     });
+                    
+                    // Increment active ticks for each CPU tick spent executing
+                    g_active_cpu_ticks++;
                 }
+                
                 if (g_exit_flag) break;
+                
                 std::vector<std::string> singleInstruction = generateRandomInstructions(
                     current_process->name, 1, enable_sleep, enable_for);
                 try {
@@ -146,6 +156,7 @@ void fcfs_worker_thread(int core_id) {
                 }
                 current_process->instructions_executed++;
             }
+            
             if (!g_exit_flag) {
                 lock_guard<mutex> lock(g_process_lists_mutex);
                 current_process->state = FINISHED;
@@ -153,6 +164,8 @@ void fcfs_worker_thread(int core_id) {
                 g_running_processes[core_id] = nullptr;
             }
         } else {
+            // IDLE: Core has no process to execute
+            g_idle_cpu_ticks++;
             this_thread::sleep_for(chrono::milliseconds(100));
         }
     }
@@ -174,6 +187,9 @@ void rr_worker_thread(int core_id) {
         }
 
         if (current_process != nullptr) {
+            // ACTIVE: Core is executing a process
+            g_active_cpu_ticks++;
+            
             // 1. Handle quantum expiration
             current_process->remaining_quantum--;
             
@@ -198,6 +214,9 @@ void rr_worker_thread(int core_id) {
                     g_tick_cv.wait(lock, [&]{
                         return g_cpu_ticks.load() > last_known_tick || g_exit_flag.load();
                     });
+                    
+                    // Increment active ticks for each CPU tick spent executing
+                    g_active_cpu_ticks++;
                 }
                 
                 if (!g_exit_flag.load()) {
@@ -241,6 +260,8 @@ void rr_worker_thread(int core_id) {
                      << current_process->name << " requeued\n";
             }
         } else {
+            // IDLE: Core has no process to execute
+            g_idle_cpu_ticks++;
             this_thread::sleep_for(chrono::milliseconds(10));
         }
     }
