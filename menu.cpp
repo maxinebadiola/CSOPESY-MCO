@@ -95,8 +95,8 @@ void printVmstat() {
     printf("      %lld idle cpu ticks\n", idle_ticks);
     printf("      %lld active cpu ticks\n", active_ticks);
     printf("      %lld total cpu ticks\n", total_ticks);
-    // printf("      %lld pages paged in\n", g_pages_paged_in.load());
-    // printf("      %lld pages paged out\n", g_pages_paged_out.load());
+    printf("      %lld pages paged in\n", g_pages_paged_in.load());
+    printf("      %lld pages paged out\n", g_pages_paged_out.load());
 }
 
 void screenSession(Console& screen) {
@@ -128,6 +128,7 @@ void screenSession(Console& screen) {
                     << config_num_cpu << " CPU cores..." << endl;
                 
                 g_keep_generating = true;  // Enable generation
+                g_exit_flag = false;  // Make sure exit flag is reset
                 g_tick_thread = thread(tick_generator_thread);
                 g_scheduler_thread = thread(schedulerThread);
                 
@@ -142,11 +143,15 @@ void screenSession(Console& screen) {
                 
                 // Start generation thread
                 thread([](string screenName) {
-                    while (g_keep_generating) {
+                    while (g_keep_generating && !g_exit_flag) {
                         createTestProcesses(screenName);
-                        this_thread::sleep_for(chrono::milliseconds(1000));
+                        this_thread::sleep_for(chrono::milliseconds(100)); // Faster generation for test
                     }
                 }, screen.name).detach();
+                
+                cout << "Scheduler started. Generating processes for paging test..." << endl;
+            } else {
+                cout << "Scheduler is already running." << endl;
             }
             screen.currentLine++;
         } else if (screenCmd == "scheduler-stop") {

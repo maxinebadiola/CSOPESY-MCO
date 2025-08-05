@@ -124,19 +124,39 @@ struct MemoryBlock {
     string process_name;
 };
 
+struct Page {
+    int page_number;
+    string process_name;
+    bool is_in_memory;
+    int frame_number;
+    time_t last_access_time;
+};
+
 extern vector<MemoryBlock> g_memory_blocks;
 extern mutex g_memory_mutex;
 extern int g_max_overall_mem;
 extern int g_mem_per_frame;
 extern int g_min_mem_per_proc;
 extern int g_max_mem_per_proc;
+extern vector<Page> g_page_table;
+extern vector<bool> g_frame_table;
+extern ofstream g_backing_store;
+extern mutex g_paging_mutex;
 
 void initializeMemory();
 bool allocateMemoryFirstFit(PCB* process);
 void deallocateMemory(PCB* process);
 int calculatePagesRequired(int memorySize);
-
 void printMemoryState(const char* context);
+
+// Paging functions
+void initializePaging();
+void pageIn(const string& process_name, int page_number);
+void pageOut(const string& process_name, int page_number);
+int findLRUPage();
+bool isProcessInMemory(const string& process_name);
+void simulateMemoryAccess(const string& process_name);
+void closePagingSystem();
 
 // Instruction execution
 void DECLARE(const string& var, uint16_t value);
