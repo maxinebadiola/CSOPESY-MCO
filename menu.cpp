@@ -9,7 +9,7 @@ void printHeader() {
  | |____ ____) | |__| | |    | |____ ____) |  | |   
   \_____|_____/ \____/|_|    |______|_____/   |_|   
 
-            CSOPESY CLI EMULATOR 
+                  CSOPESY CLI EMULATOR
 )" << endl;
 }
 
